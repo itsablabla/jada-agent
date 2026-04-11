@@ -48,7 +48,12 @@ class SettingsController extends Controller {
                 $ip = gethostbyname($host);
                 if ($ip && (
                     str_starts_with($ip, '169.254.') ||   // link-local / cloud metadata
-                    $ip === '0.0.0.0'
+                    str_starts_with($ip, '127.') ||        // loopback
+                    str_starts_with($ip, '10.') ||         // RFC 1918 Class A
+                    str_starts_with($ip, '192.168.') ||    // RFC 1918 Class C
+                    preg_match('/^172\.(1[6-9]|2[0-9]|3[01])\./', $ip) || // RFC 1918 Class B
+                    $ip === '0.0.0.0' ||
+                    $ip === '::1'                          // IPv6 loopback
                 )) {
                     return new JSONResponse(['status' => 'error', 'message' => 'Invalid URL: blocked destination'], 400);
                 }
