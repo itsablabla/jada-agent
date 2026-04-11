@@ -1,24 +1,20 @@
-// Jada Chat Widget for Nextcloud — v5.0 (Native OpenClaw WebChat)
-// Uses OpenClaw Gateway WebSocket protocol as a native channel.
-// No HTTP polling, no SSE, no PHP proxy — persistent WebSocket for zero-latency chat.
-// Features: native WS streaming, expand/collapse activity feed, persistent memory,
-// conversation history (multi-turn), auto-reconnect, live connection status
+// Jada Chat Widget for Nextcloud — v5.1 (Native OpenClaw HTTP SSE)
+// Direct browser → OpenClaw via /v1/chat/completions (OpenAI-compatible SSE streaming).
+// No PHP proxy, no WebSocket device pairing — native OpenClaw channel with bearer token.
+// Features: SSE streaming, expand/collapse activity feed, persistent memory,
+// conversation history (multi-turn), live connection status, AbortController stop
 (function() {
   'use strict';
 
   // ── Configuration ──────────────────────────────────────────────────
-  var OPENCLAW_WS = 'wss://openclaw.garzaos.online/ws/chat';
+  var OPENCLAW_URL = 'https://openclaw.garzaos.online';
   var OPENCLAW_TOKEN = 'jada-agent-oc-key-2026';
+  var OPENCLAW_MODEL = 'openclaw/main';
 
   var STORAGE_KEY = 'jada-conversations';
   var ACTIVE_KEY = 'jada-active-conv';
   var MAX_CONVERSATIONS = 50;
   var MAX_HISTORY = 40;
-
-  // WebSocket reconnect settings
-  var WS_RECONNECT_INTERVAL = 3000;
-  var WS_MAX_RECONNECT = 20;
-  var WS_CONNECT_TIMEOUT = 10000;
 
   // ── State ──────────────────────────────────────────────────────────
   var conversations = [];
@@ -28,19 +24,8 @@
   var isLoading = false;
   var unreadCount = 0;
 
-  // WebSocket state
-  var ws = null;
-  var wsState = 'disconnected'; // disconnected | connecting | authenticating | connected | reconnecting
-  var wsMessageId = 0;
-  var wsPendingRequests = {};
-  var wsReconnectAttempts = 0;
-  var wsReconnectTimer = null;
-  var wsSessionKey = null;
-  var wsDeviceToken = null;
-
-  // Streaming state
-  var currentStreamMessageId = null;
-  var lastStreamedContent = '';
+  // SSE / streaming state
+  var currentAbort = null;  // AbortController for cancelling in-flight requests
   var streamBuffer = '';
 
   // Activity feed state
@@ -81,7 +66,7 @@
     error: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 5v4M8 11v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
     generating: '<svg viewBox="0 0 16 16"><path d="M8 2v2M8 12v2M2 8h2M12 8h2M4 4l1.5 1.5M10.5 10.5L12 12M12 4l-1.5 1.5M5.5 10.5L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="2s" repeatCount="indefinite"/></path></svg>',
     tool: '<svg viewBox="0 0 16 16"><path d="M10 2l4 4-6 6-4-4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 14l3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
-    ws: '<svg viewBox="0 0 16 16"><path d="M2 8c0-3.3 2.7-6 6-6s6 2.7 6 6-2.7 6-6 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 8c0-1.7.7-3 2-4M9 4c1.3 1 2 2.3 2 4" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.5"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/></svg>',
+    stream: '<svg viewBox="0 0 16 16"><path d="M2 8c0-3.3 2.7-6 6-6s6 2.7 6 6-2.7 6-6 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 8c0-1.7.7-3 2-4M9 4c1.3 1 2 2.3 2 4" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.5"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/></svg>',
   };
 
   // ── Storage ────────────────────────────────────────────────────────
@@ -204,492 +189,37 @@
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  // ── OpenClaw WebSocket Client ──────────────────────────────────────
-  // Native Gateway WebSocket protocol (inlined from openclaw-webchat SDK)
-
-  function wsNextId() {
-    return Date.now() + '-' + (++wsMessageId);
-  }
-
-  function wsSendFrame(frame) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(frame));
-    }
-  }
-
-  function wsSendConnectRequest() {
-    wsSendFrame({
-      type: 'req',
-      id: wsNextId(),
-      method: 'connect',
-      params: {
-        minProtocol: 3,
-        maxProtocol: 3,
-        client: {
-          id: 'jada-nextcloud-webchat',
-          version: '5.0',
-          platform: 'browser',
-          mode: 'node'
-        },
-        scopes: ['operator.read', 'operator.write'],
-        auth: wsDeviceToken
-          ? { deviceToken: wsDeviceToken }
-          : { token: OPENCLAW_TOKEN }
-      }
+  // ── Build OpenAI-compatible messages array ─────────────────────────
+  function buildMessagesPayload(conv) {
+    var msgs = [];
+    // System prompt
+    msgs.push({
+      role: 'system',
+      content: 'You are Jada, an AI assistant integrated into Nextcloud. Be helpful, concise, and friendly. You have access to the user\'s Nextcloud environment. Format responses with markdown when useful.'
     });
-  }
-
-  function wsRequest(method, params) {
-    if (wsState !== 'connected') {
-      return Promise.reject(new Error('Not connected'));
-    }
-    var id = wsNextId();
-    return new Promise(function(resolve, reject) {
-      var timeout = setTimeout(function() {
-        delete wsPendingRequests[id];
-        reject(new Error('Request timeout: ' + method));
-      }, 30000);
-
-      wsPendingRequests[id] = {
-        resolve: resolve,
-        reject: reject,
-        timeout: timeout
-      };
-
-      wsSendFrame({
-        type: 'req',
-        id: id,
-        method: method,
-        params: params || {}
+    // Conversation history (last MAX_HISTORY messages, excluding system)
+    var history = conv.messages.filter(function(m) { return m.role !== 'system'; });
+    var start = Math.max(0, history.length - MAX_HISTORY);
+    for (var i = start; i < history.length; i++) {
+      var m = history[i];
+      if (m._streaming) continue; // skip incomplete streaming messages
+      msgs.push({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.text || ''
       });
-    });
+    }
+    return msgs;
   }
 
-  function wsHandleFrame(frame) {
-    switch (frame.type) {
-      case 'req':
-        // Server request — handle connect challenge
-        if (frame.method === 'connect.challenge') {
-          wsSendConnectRequest();
-        }
-        break;
-
-      case 'res':
-        wsHandleResponse(frame);
-        break;
-
-      case 'event':
-        wsHandleEvent(frame);
-        break;
-    }
-  }
-
-  function wsHandleResponse(frame) {
-    var payload = frame.payload;
-
-    // Handle hello-ok (connection established)
-    if (frame.ok && payload && payload.type === 'hello-ok') {
-      if (payload.auth && payload.auth.deviceToken) {
-        wsDeviceToken = payload.auth.deviceToken;
-        try { localStorage.setItem('jada-device-token', wsDeviceToken); } catch(e) {}
-      }
-      if (!wsSessionKey && payload.snapshot && payload.snapshot.sessionDefaults && payload.snapshot.sessionDefaults.mainSessionKey) {
-        wsSessionKey = payload.snapshot.sessionDefaults.mainSessionKey;
-      }
-      wsState = 'connected';
-      wsReconnectAttempts = 0;
-      setStatus('connected');
-      console.log('[Jada] WebSocket connected to OpenClaw');
-      return;
-    }
-
-    // Handle pending request responses
-    var pending = wsPendingRequests[frame.id];
-    if (pending) {
-      clearTimeout(pending.timeout);
-      delete wsPendingRequests[frame.id];
-      if (frame.ok) {
-        pending.resolve(frame.payload);
-      } else {
-        pending.reject(new Error((frame.error && frame.error.message) || 'Request failed'));
-      }
-    }
-  }
-
-  function wsHandleEvent(frame) {
-    switch (frame.event) {
-      case 'connect.challenge':
-        wsSendConnectRequest();
-        break;
-
-      case 'message':
-        // Complete message (non-streaming)
-        if (frame.payload && frame.payload.message) {
-          wsHandleCompleteMessage(frame.payload.message);
-        }
-        break;
-
-      case 'stream.start':
-        if (frame.payload && frame.payload.messageId) {
-          wsHandleStreamStart(frame.payload.messageId);
-        }
-        break;
-
-      case 'stream.chunk':
-        if (frame.payload) {
-          wsHandleStreamChunk(frame.payload.messageId, frame.payload.chunk, frame.payload.done);
-        }
-        break;
-
-      case 'chat':
-        wsHandleChatEvent(frame.payload);
-        break;
-
-      case 'agent':
-        // Agent lifecycle events (tool calls, etc.)
-        wsHandleAgentEvent(frame.payload);
-        break;
-
-      case 'health':
-      case 'tick':
-      case 'heartbeat':
-      case 'presence':
-        break;
-
-      default:
-        break;
-    }
-  }
-
-  // ── Chat Event Handling (native OpenClaw protocol) ─────────────────
-  // The gateway sends `chat` events with accumulated content on each delta.
-  // We diff against lastStreamedContent to extract new chunks.
-
-  function wsHandleChatEvent(payload) {
-    if (!payload) return;
-    var messageId = payload.runId || 'stream';
-    var contentBlocks = (payload.message && payload.message.content) || [];
-    var fullContent = '';
-    for (var i = 0; i < contentBlocks.length; i++) {
-      if (contentBlocks[i].type === 'text') fullContent += contentBlocks[i].text;
-    }
-
-    // Stream start
-    if (!currentStreamMessageId && payload.state === 'delta') {
-      currentStreamMessageId = messageId;
-      lastStreamedContent = '';
-      wsHandleStreamStart(messageId);
-    }
-
-    // Extract new chunk by diffing accumulated content
-    if (fullContent.length > lastStreamedContent.length) {
-      var newChunk = fullContent.slice(lastStreamedContent.length);
-      if (newChunk && currentStreamMessageId) {
-        wsHandleStreamChunk(currentStreamMessageId, newChunk, false);
-      }
-      lastStreamedContent = fullContent;
-    }
-
-    // Stream end
-    if (payload.state === 'final') {
-      wsHandleStreamEnd(messageId, fullContent);
-      currentStreamMessageId = null;
-      lastStreamedContent = '';
-    }
-  }
-
-  function wsHandleAgentEvent(payload) {
-    if (!payload) return;
-    // Handle tool call indicators from agent events
-    if (payload.type === 'tool_call' || payload.toolName) {
-      var toolName = payload.toolName || payload.name || 'tool';
-      if (isLoading) {
-        // Complete current generating step and create tool step
-        for (var i = 0; i < activitySteps.length; i++) {
-          if (activitySteps[i].status === 'active' && activitySteps[i].icon === 'generating') {
-            completeStep(activitySteps[i].id, 'done');
-            break;
-          }
-        }
-        createStep('Using tool: ' + toolName, 'tool', 'active');
-      }
-    }
-  }
-
-  // ── Stream Event Handlers ──────────────────────────────────────────
-  var streamStartTime = null;
-  var firstChunkReceived = false;
-  var generatingStepId = null;
-
-  function wsHandleStreamStart(messageId) {
-    if (!isLoading) return;
-    streamStartTime = Date.now();
-    firstChunkReceived = false;
-    generatingStepId = null;
-
-    // Complete "connecting" step if still active
-    if (activitySteps.length > 0 && activitySteps[0].status === 'active') {
-      var connectMs = Date.now() - activitySteps[0].startTime;
-      activitySteps[0].label = 'Connected (' + formatMs(connectMs) + ')';
-      completeStep(activitySteps[0].id, 'done');
-    }
-
-    // Create "thinking" step
-    createStep('Thinking...', 'think', 'active');
-  }
-
-  function wsHandleStreamChunk(messageId, chunk, done) {
-    if (!isLoading) return;
-
-    if (!firstChunkReceived) {
-      firstChunkReceived = true;
-      // Complete "thinking" step
-      for (var i = 0; i < activitySteps.length; i++) {
-        if (activitySteps[i].status === 'active' && activitySteps[i].icon === 'think') {
-          var thinkMs = Date.now() - activitySteps[i].startTime;
-          activitySteps[i].label = 'Thought (' + formatMs(thinkMs) + ')';
-          completeStep(activitySteps[i].id, 'done');
-          break;
-        }
-      }
-      // Create "generating" step
-      var genStep = createStep('Generating response...', 'generating', 'active');
-      generatingStepId = genStep.id;
-    }
-
-    streamBuffer += chunk;
-
-    // Check for new activity step based on content patterns
-    var detected = detectStepFromContent(chunk);
-    if (detected && generatingStepId) {
-      completeStep(generatingStepId, 'done');
-      var newStep = createStep(detected.label, detected.icon, 'active');
-      generatingStepId = newStep.id;
-    }
-
-    // Update the streaming assistant message
-    var conv = getConv(activeConvId);
-    if (conv) {
-      var lastMsg = conv.messages[conv.messages.length - 1];
-      if (lastMsg && lastMsg._streaming) {
-        lastMsg.text = streamBuffer;
-        renderStreamingMessage();
-        scrollToBottom();
-      }
-    }
-
-    if (done) {
-      wsHandleStreamEnd(messageId, streamBuffer);
-    }
-  }
-
-  function wsHandleStreamEnd(messageId, fullContent) {
-    if (!isLoading) return;
-
-    // Complete any remaining active steps
-    for (var i = 0; i < activitySteps.length; i++) {
-      if (activitySteps[i].status === 'active') {
-        completeStep(activitySteps[i].id, 'done');
-      }
-    }
-
-    // Add final "done" step with total time
-    var totalMs = activitySteps.length > 0
-      ? Date.now() - activitySteps[0].startTime
-      : 0;
-    createStep('Complete (' + formatMs(totalMs) + ')', 'done', 'done');
-
-    // Finalize message
-    var conv = getConv(activeConvId);
-    if (conv) {
-      for (var j = 0; j < conv.messages.length; j++) {
-        if (conv.messages[j]._streaming) {
-          delete conv.messages[j]._streaming;
-          if (!conv.messages[j].text && fullContent) conv.messages[j].text = fullContent;
-          break;
-        }
-      }
-      conv.updatedAt = Date.now();
-      updateConvTitle(conv);
-    }
-
-    isLoading = false;
-    if (activityTimer) { clearInterval(activityTimer); activityTimer = null; }
-    saveConversations();
-    renderMessages();
-    renderSidebar();
-    updateSendButton();
-    scrollToBottom();
-
-    // Fade out activity feed after 4s
-    setTimeout(function() {
-      if (!isLoading) {
-        activitySteps = [];
-        renderActivityFeed();
-      }
-    }, 4000);
-
-    if (!chatOpen) { unreadCount++; renderBadge(); }
-  }
-
-  function wsHandleCompleteMessage(message) {
-    // Handle non-streaming complete message
-    if (!isLoading) return;
-    var content = '';
-    if (typeof message.content === 'string') {
-      content = message.content;
-    } else if (message.content && message.role) {
-      content = message.content;
-    }
-
-    var conv = getConv(activeConvId);
-    if (conv) {
-      for (var j = 0; j < conv.messages.length; j++) {
-        if (conv.messages[j]._streaming) {
-          delete conv.messages[j]._streaming;
-          conv.messages[j].text = content;
-          break;
-        }
-      }
-      conv.updatedAt = Date.now();
-      updateConvTitle(conv);
-    }
-
-    isLoading = false;
-    if (activityTimer) { clearInterval(activityTimer); activityTimer = null; }
-    saveConversations();
-    renderMessages();
-    updateSendButton();
-    scrollToBottom();
-  }
-
-  // ── WebSocket Connection Management ────────────────────────────────
-
-  function wsConnect() {
-    if (wsState === 'connected' || wsState === 'connecting' || wsState === 'authenticating') return;
-
-    wsState = 'connecting';
-    setStatus('connecting');
-
-    // Restore device token from localStorage
-    if (!wsDeviceToken) {
-      try { wsDeviceToken = localStorage.getItem('jada-device-token'); } catch(e) {}
-    }
-
-    var connectTimeout = setTimeout(function() {
-      if (ws) ws.close();
-      wsState = 'disconnected';
-      setStatus('error');
-      wsScheduleReconnect();
-    }, WS_CONNECT_TIMEOUT);
-
-    try {
-      ws = new WebSocket(OPENCLAW_WS);
-
-      ws.onopen = function() {
-        wsState = 'authenticating';
-        setStatus('connecting');
-      };
-
-      ws.onmessage = function(event) {
-        try {
-          var frame = JSON.parse(event.data);
-          // If this is the hello-ok response, clear the connect timeout
-          if (frame.type === 'res' && frame.ok && frame.payload && frame.payload.type === 'hello-ok') {
-            clearTimeout(connectTimeout);
-          }
-          wsHandleFrame(frame);
-        } catch(e) {
-          // ignore parse errors
-        }
-      };
-
-      ws.onerror = function() {
-        clearTimeout(connectTimeout);
-        wsState = 'disconnected';
-        setStatus('error');
-      };
-
-      ws.onclose = function(event) {
-        clearTimeout(connectTimeout);
-        var wasConnected = wsState === 'connected';
-        ws = null;
-        wsState = 'disconnected';
-
-        // Reject all pending requests
-        var keys = Object.keys(wsPendingRequests);
-        for (var i = 0; i < keys.length; i++) {
-          var pending = wsPendingRequests[keys[i]];
-          clearTimeout(pending.timeout);
-          pending.reject(new Error('Disconnected'));
-        }
-        wsPendingRequests = {};
-
-        if (wasConnected) {
-          setStatus('error');
-          console.log('[Jada] WebSocket disconnected:', event.code, event.reason);
-        }
-        wsScheduleReconnect();
-      };
-    } catch(e) {
-      clearTimeout(connectTimeout);
-      wsState = 'disconnected';
-      setStatus('error');
-      wsScheduleReconnect();
-    }
-  }
-
-  function wsDisconnect() {
-    wsClearReconnect();
-    if (ws) {
-      ws.close(1000, 'Client disconnect');
-      ws = null;
-    }
-    wsState = 'disconnected';
-    setStatus('error');
-  }
-
-  function wsScheduleReconnect() {
-    wsClearReconnect();
-    wsReconnectAttempts++;
-    if (wsReconnectAttempts > WS_MAX_RECONNECT) {
-      console.log('[Jada] Max reconnect attempts reached');
-      setStatus('error');
-      return;
-    }
-    wsState = 'reconnecting';
-    // Exponential backoff capped at 30s
-    var delay = Math.min(WS_RECONNECT_INTERVAL * Math.pow(1.5, wsReconnectAttempts - 1), 30000);
-    wsReconnectTimer = setTimeout(function() {
-      wsConnect();
-    }, delay);
-  }
-
-  function wsClearReconnect() {
-    if (wsReconnectTimer) {
-      clearTimeout(wsReconnectTimer);
-      wsReconnectTimer = null;
-    }
-  }
-
-  // ── Send Message via WebSocket ─────────────────────────────────────
+  // ── Native OpenClaw SSE Streaming Client ───────────────────────────
+  // Uses /v1/chat/completions with stream:true (OpenAI-compatible SSE)
+  // Direct browser → OpenClaw, no PHP proxy
 
   function sendToAgent(userText) {
     if (isLoading) return;
 
-    if (wsState !== 'connected') {
-      // Try to reconnect and queue the message
-      var conv = getConv(activeConvId);
-      if (conv) {
-        conv.messages.push({ role: 'system', text: 'Not connected to OpenClaw. Reconnecting...' });
-        saveConversations();
-        renderMessages();
-      }
-      wsConnect();
-      return;
-    }
-
     isLoading = true;
+    setStatus('connecting');
 
     var conv = getConv(activeConvId);
     if (!conv) { isLoading = false; return; }
@@ -698,12 +228,9 @@
     activitySteps = [];
     streamBuffer = '';
     currentStepId = null;
-    currentStreamMessageId = null;
-    lastStreamedContent = '';
-    firstChunkReceived = false;
 
-    // Create initial "connecting" step (will be completed when stream starts)
-    createStep('Sending to OpenClaw...', 'ws', 'active');
+    // Create initial "connecting" step
+    createStep('Connecting to Jada...', 'stream', 'active');
 
     // Add placeholder assistant message for streaming
     var assistantMsg = { role: 'assistant', text: '', _streaming: true };
@@ -718,17 +245,201 @@
       if (isLoading) renderActivityFeed();
     }, 1000);
 
-    // Send via WebSocket native protocol
-    if (!wsSessionKey) {
-      wsSessionKey = 'main';
-    }
+    // Build request payload
+    var messages = buildMessagesPayload(conv);
+    // Replace the last assistant (empty streaming placeholder) with nothing — it's not sent
+    // The user message was already pushed to conv.messages before calling sendToAgent
+    var requestBody = JSON.stringify({
+      model: OPENCLAW_MODEL,
+      messages: messages,
+      stream: true
+    });
 
-    wsRequest('chat.send', {
-      sessionKey: wsSessionKey,
-      message: userText,
-      idempotencyKey: Date.now() + '-' + Math.random().toString(36).slice(2)
+    // Create AbortController for cancellation
+    var abortController = new AbortController();
+    currentAbort = abortController;
+
+    var streamStartTime = Date.now();
+    var firstChunkReceived = false;
+    var generatingStepId = null;
+
+    fetch(OPENCLAW_URL + '/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + OPENCLAW_TOKEN,
+        'Content-Type': 'application/json'
+      },
+      body: requestBody,
+      signal: abortController.signal
+    }).then(function(response) {
+      if (!response.ok) {
+        throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+      }
+
+      setStatus('connected');
+
+      // Complete "connecting" step
+      if (activitySteps.length > 0 && activitySteps[0].status === 'active') {
+        var connectMs = Date.now() - activitySteps[0].startTime;
+        activitySteps[0].label = 'Connected (' + formatMs(connectMs) + ')';
+        completeStep(activitySteps[0].id, 'done');
+      }
+
+      // Create "thinking" step
+      createStep('Thinking...', 'think', 'active');
+
+      // Read the SSE stream
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var lineBuf = '';
+
+      function processChunk(result) {
+        if (result.done) {
+          // Stream ended
+          finishStream();
+          return;
+        }
+
+        lineBuf += decoder.decode(result.value, { stream: true });
+
+        // Process complete SSE lines
+        var lines = lineBuf.split('\n');
+        lineBuf = lines.pop(); // keep incomplete last line in buffer
+
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (!line) continue;
+          if (line === 'data: [DONE]') {
+            finishStream();
+            return;
+          }
+          if (line.indexOf('data: ') === 0) {
+            try {
+              var data = JSON.parse(line.substring(6));
+              var delta = data.choices && data.choices[0] && data.choices[0].delta;
+              var finishReason = data.choices && data.choices[0] && data.choices[0].finish_reason;
+
+              if (delta && delta.content) {
+                handleChunk(delta.content);
+              }
+
+              if (finishReason === 'stop') {
+                finishStream();
+                return;
+              }
+            } catch(e) {
+              // ignore parse errors for individual chunks
+            }
+          }
+        }
+
+        // Continue reading
+        return reader.read().then(processChunk);
+      }
+
+      function handleChunk(chunk) {
+        if (!isLoading) return;
+
+        if (!firstChunkReceived) {
+          firstChunkReceived = true;
+          // Complete "thinking" step
+          for (var i = 0; i < activitySteps.length; i++) {
+            if (activitySteps[i].status === 'active' && activitySteps[i].icon === 'think') {
+              var thinkMs = Date.now() - activitySteps[i].startTime;
+              activitySteps[i].label = 'Thought (' + formatMs(thinkMs) + ')';
+              completeStep(activitySteps[i].id, 'done');
+              break;
+            }
+          }
+          // Create "generating" step
+          var genStep = createStep('Generating response...', 'generating', 'active');
+          generatingStepId = genStep.id;
+        }
+
+        streamBuffer += chunk;
+
+        // Check for new activity step based on content patterns
+        var detected = detectStepFromContent(chunk);
+        if (detected && generatingStepId) {
+          completeStep(generatingStepId, 'done');
+          var newStep = createStep(detected.label, detected.icon, 'active');
+          generatingStepId = newStep.id;
+        }
+
+        // Update the streaming assistant message
+        var activeConv = getConv(activeConvId);
+        if (activeConv) {
+          var lastMsg = activeConv.messages[activeConv.messages.length - 1];
+          if (lastMsg && lastMsg._streaming) {
+            lastMsg.text = streamBuffer;
+            renderStreamingMessage();
+            scrollToBottom();
+          }
+        }
+      }
+
+      function finishStream() {
+        if (!isLoading) return;
+
+        // Complete any remaining active steps
+        for (var i = 0; i < activitySteps.length; i++) {
+          if (activitySteps[i].status === 'active') {
+            completeStep(activitySteps[i].id, 'done');
+          }
+        }
+
+        // Add final "done" step with total time
+        var totalMs = activitySteps.length > 0
+          ? Date.now() - activitySteps[0].startTime
+          : 0;
+        createStep('Complete (' + formatMs(totalMs) + ')', 'done', 'done');
+
+        // Finalize message
+        var activeConv = getConv(activeConvId);
+        if (activeConv) {
+          for (var j = 0; j < activeConv.messages.length; j++) {
+            if (activeConv.messages[j]._streaming) {
+              delete activeConv.messages[j]._streaming;
+              if (!activeConv.messages[j].text && streamBuffer) {
+                activeConv.messages[j].text = streamBuffer;
+              }
+              break;
+            }
+          }
+          activeConv.updatedAt = Date.now();
+          updateConvTitle(activeConv);
+        }
+
+        isLoading = false;
+        currentAbort = null;
+        if (activityTimer) { clearInterval(activityTimer); activityTimer = null; }
+        saveConversations();
+        renderMessages();
+        renderSidebar();
+        updateSendButton();
+        scrollToBottom();
+
+        // Fade out activity feed after 4s
+        setTimeout(function() {
+          if (!isLoading) {
+            activitySteps = [];
+            renderActivityFeed();
+          }
+        }, 4000);
+
+        if (!chatOpen) { unreadCount++; renderBadge(); }
+      }
+
+      return reader.read().then(processChunk);
+
     }).catch(function(err) {
-      console.error('[Jada] chat.send failed:', err);
+      if (err.name === 'AbortError') {
+        // User cancelled — already handled by stopGeneration()
+        return;
+      }
+
+      console.error('[Jada] SSE request failed:', err);
+      setStatus('error');
 
       // Mark all active steps as error
       for (var i = 0; i < activitySteps.length; i++) {
@@ -736,13 +447,23 @@
       }
       createStep('Error: ' + err.message, 'error', 'error');
 
-      // Remove empty streaming message
-      delete assistantMsg._streaming;
-      var idx = conv.messages.indexOf(assistantMsg);
-      if (idx >= 0 && !assistantMsg.text) conv.messages.splice(idx, 1);
-      conv.messages.push({ role: 'system', text: 'Connection error: ' + err.message });
+      // Remove empty streaming message, add error system message
+      var activeConv = getConv(activeConvId);
+      if (activeConv) {
+        for (var j = 0; j < activeConv.messages.length; j++) {
+          if (activeConv.messages[j]._streaming) {
+            delete activeConv.messages[j]._streaming;
+            if (!activeConv.messages[j].text) {
+              activeConv.messages.splice(j, 1);
+            }
+            break;
+          }
+        }
+        activeConv.messages.push({ role: 'system', text: 'Connection error: ' + err.message });
+      }
 
       isLoading = false;
+      currentAbort = null;
       if (activityTimer) { clearInterval(activityTimer); activityTimer = null; }
       saveConversations();
       renderMessages();
@@ -813,6 +534,7 @@
       '#oc-widget-status.connected{background:#4caf50;}',
       '#oc-widget-status.connecting{background:#ffc107;}',
       '#oc-widget-status.error{background:#e53935;}',
+      '#oc-widget-status.idle{background:#4caf50;}',
 
       // Chat window
       '#oc-chat-window{position:fixed;bottom:92px;right:24px;z-index:100000;width:420px;max-width:calc(100vw - 48px);height:600px;max-height:calc(100vh - 120px);background:#0d0d0d;border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,0.6);display:none;flex-direction:column;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;border:1px solid rgba(255,255,255,0.06);}',
@@ -929,7 +651,7 @@
     var btn = document.createElement('button');
     btn.id = 'oc-widget-btn';
     btn.title = 'Chat with Jada';
-    btn.innerHTML = chatSvg + '<div id="oc-widget-badge"></div><div id="oc-widget-status"></div>';
+    btn.innerHTML = chatSvg + '<div id="oc-widget-badge"></div><div id="oc-widget-status" class="idle"></div>';
     btn.onclick = toggleChat;
     document.body.appendChild(btn);
 
@@ -1047,7 +769,12 @@
   }
 
   function stopGeneration() {
-    // WebSocket doesn't have AbortController — just stop processing incoming events
+    // Cancel in-flight SSE request
+    if (currentAbort) {
+      currentAbort.abort();
+      currentAbort = null;
+    }
+
     isLoading = false;
     for (var i = 0; i < activitySteps.length; i++) {
       if (activitySteps[i].status === 'active') completeStep(activitySteps[i].id, 'done');
@@ -1066,6 +793,7 @@
       }
       saveConversations();
     }
+    setStatus('idle');
     updateSendButton();
     renderMessages();
   }
@@ -1076,6 +804,7 @@
     conv.messages = [];
     isLoading = false;
     activitySteps = [];
+    if (currentAbort) { currentAbort.abort(); currentAbort = null; }
     if (activityTimer) { clearInterval(activityTimer); activityTimer = null; }
     saveConversations();
     renderMessages();
@@ -1096,7 +825,7 @@
         '  <svg class="oc-welcome-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>',
         '  <p><strong>Jada</strong></p>',
         '  <p>Your AI assistant</p>',
-        '  <p class="oc-welcome-hint">Connected via WebSocket to OpenClaw</p>',
+        '  <p class="oc-welcome-hint">Direct connection to OpenClaw</p>',
         '</div>'
       ].join('');
       updateSendButton();
@@ -1275,31 +1004,33 @@
   // ── Init ───────────────────────────────────────────────────────────
   function init() {
     if (document.getElementById('body-login') || document.getElementById('body-public')) return;
-    console.log('[Jada] v5.0 — Native OpenClaw WebChat (WebSocket, no HTTP proxy)');
+    console.log('[Jada] v5.1 — Native OpenClaw HTTP SSE (direct, no proxy)');
 
     loadConversations();
     createWidget();
     renderMessages();
 
-    // Connect to OpenClaw Gateway via WebSocket
-    wsConnect();
+    // Status starts as idle (green) — no persistent connection needed
+    // Each message creates a fresh SSE stream directly to OpenClaw
+    setStatus('idle');
   }
 
   // Debug API
   window.__jadaWidget = {
     getState: function() {
       return {
-        wsState: wsState, isLoading: isLoading, chatOpen: chatOpen,
+        isLoading: isLoading, chatOpen: chatOpen,
         conversations: conversations.length, activeConvId: activeConvId,
         activitySteps: activitySteps.length, streamBuffer: streamBuffer.length,
-        wsSessionKey: wsSessionKey, wsReconnectAttempts: wsReconnectAttempts
+        endpoint: OPENCLAW_URL, model: OPENCLAW_MODEL
       };
     },
     getConversations: function() { return conversations; },
     getSteps: function() { return activitySteps; },
     exportData: function() { return JSON.stringify(conversations, null, 2); },
-    reconnect: function() { wsDisconnect(); wsReconnectAttempts = 0; wsConnect(); },
-    disconnect: wsDisconnect
+    setEndpoint: function(url) { OPENCLAW_URL = url; console.log('[Jada] Endpoint set to:', url); },
+    setToken: function(token) { OPENCLAW_TOKEN = token; console.log('[Jada] Token updated'); },
+    setModel: function(model) { OPENCLAW_MODEL = model; console.log('[Jada] Model set to:', model); }
   };
 
   if (document.readyState === 'loading') {
