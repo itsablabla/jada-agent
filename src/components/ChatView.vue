@@ -84,7 +84,7 @@ export default {
 	methods: {
 		async sendMessage(text) {
 			const message = text || this.inputText.trim()
-			if (!message) return
+			if (!message || this.loading) return
 
 			this.inputText = ''
 			this.messages.push({
