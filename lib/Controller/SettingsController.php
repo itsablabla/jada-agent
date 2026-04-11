@@ -45,17 +45,22 @@ class SettingsController extends Controller {
             }
             $host = parse_url($url, PHP_URL_HOST);
             if ($host) {
-                $ip = gethostbyname($host);
-                if ($ip && (
-                    str_starts_with($ip, '169.254.') ||   // link-local / cloud metadata
-                    str_starts_with($ip, '127.') ||        // loopback
-                    str_starts_with($ip, '10.') ||         // RFC 1918 Class A
-                    str_starts_with($ip, '192.168.') ||    // RFC 1918 Class C
-                    preg_match('/^172\.(1[6-9]|2[0-9]|3[01])\./', $ip) || // RFC 1918 Class B
-                    $ip === '0.0.0.0' ||
-                    $ip === '::1'                          // IPv6 loopback
-                )) {
-                    return new JSONResponse(['status' => 'error', 'message' => 'Invalid URL: blocked destination'], 400);
+                // Strip brackets from IPv6 literals (e.g. [::1] → ::1)
+                $bareHost = trim($host, '[]');
+
+                // Block cloud metadata endpoints (IPv4 link-local + AWS/GCP/Azure metadata)
+                $ip = gethostbyname($bareHost);
+                $ipv6Addrs = array_column(@dns_get_record($bareHost, DNS_AAAA) ?: [], 'ipv6');
+                $allIps = array_filter(array_merge([$ip], $ipv6Addrs));
+
+                foreach ($allIps as $checkIp) {
+                    if (
+                        str_starts_with($checkIp, '169.254.') ||   // link-local / cloud metadata
+                        $checkIp === '0.0.0.0' ||
+                        str_starts_with($checkIp, 'fe80:')         // IPv6 link-local
+                    ) {
+                        return new JSONResponse(['status' => 'error', 'message' => 'Invalid URL: blocked destination (cloud metadata)'], 400);
+                    }
                 }
             }
             $this->config->setAppValue('jadaagent', 'openclaw_url', rtrim($url, '/'));
