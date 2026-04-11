@@ -60,12 +60,8 @@ export default {
 	},
 	methods: {
 		async loadSkills() {
-			// MCP servers configured in OpenClaw — always show them
-			this.mcpServers = [
-				{ name: 'Nextcloud', url: 'https://mcp-next.garzaos.online/mcp', connected: true },
-				{ name: 'Composio', url: 'https://mcp-next.garzaos.online/composio/mcp', connected: true },
-				{ name: 'ProtonMail', url: 'https://mcp-next.garzaos.online/protonmail/mcp', connected: true },
-			]
+			// MCP servers will be populated from OpenClaw config when available
+			this.mcpServers = []
 
 			try {
 				const result = await api.getSkills()

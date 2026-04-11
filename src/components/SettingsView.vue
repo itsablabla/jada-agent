@@ -105,8 +105,10 @@ export default {
 		},
 		async testConnection() {
 			this.testing = true
-			this.statusMsg = ''
+			this.statusMsg = 'Saving settings first...'
 			try {
+				// Save current form values so the backend tests the right URL
+				await api.saveSettings(this.settings)
 				const result = await api.getHealth()
 				if (result?.ok) {
 					this.statusMsg = 'Connection successful — agent is online'

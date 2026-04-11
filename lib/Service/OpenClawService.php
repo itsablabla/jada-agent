@@ -159,6 +159,6 @@ class OpenClawService {
         if (is_array($decoded) && !array_is_list($decoded)) {
             $decoded['_http_status'] = $httpCode;
         }
-        return $decoded;
+        return is_array($decoded) ? $decoded : ['raw' => $decoded, 'status' => $httpCode];
     }
 }
