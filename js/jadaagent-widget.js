@@ -194,7 +194,7 @@
 
   // ── Health Check ───────────────────────────────────────────────────
   function checkHealth() {
-    fetch('/apps/jadaagent/api/settings', {
+    fetch('/apps/jadaagent/api/health', {
       method: 'GET',
       headers: { 'requesttoken': getRequestToken() }
     })
@@ -312,6 +312,13 @@
     var firstChunkReceived = false;
     var lastContentLength = 0;
     var aborted = false;
+    var callbackCalled = false;
+
+    function safeCallback(val) {
+      if (callbackCalled) return;
+      callbackCalled = true;
+      callback(val);
+    }
 
     fetch(SSE_API, {
       method: 'POST',
@@ -323,7 +330,7 @@
     })
     .then(function(response) {
       if (!response.ok) {
-        callback(false);
+        safeCallback(false);
         return;
       }
 
@@ -441,13 +448,13 @@
         }, 4000);
 
         if (!chatOpen) { unreadCount++; renderBadge(); }
-        callback(true);
+        safeCallback(true);
       }
 
       processChunk();
     })
     .catch(function(err) {
-      callback(false);
+      safeCallback(false);
     });
   }
 
