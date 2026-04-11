@@ -168,7 +168,7 @@
       .replace(/`([^`]+)`/g, '<code class="oc-inline-code">$1</code>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, text, url) { if (/^javascript:/i.test(url)) return text; return '<a href="' + url + '" target="_blank" rel="noopener" class="oc-link">' + text + '</a>'; })
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, text, url) { if (!/^https?:/i.test(url)) return text; return '<a href="' + url + '" target="_blank" rel="noopener" class="oc-link">' + text + '</a>'; })
       .replace(/\n/g, '<br>');
   }
 

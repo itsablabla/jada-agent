@@ -138,6 +138,10 @@ class AgentController extends Controller {
             ob_end_clean();
         }
 
+        // Release PHP session lock so other requests from this user are not blocked
+        // during the streaming duration (up to 180s).
+        session_write_close();
+
         header('Content-Type: text/event-stream');
         header('Cache-Control: no-cache');
         header('Connection: keep-alive');
@@ -190,21 +194,24 @@ class AgentController extends Controller {
      * @NoAdminRequired
      */
     public function getConversations(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/v1/conversations'));
+        $scopedId = $this->getScopedSessionId();
+        return new JSONResponse($this->openClaw->get('/api/v1/conversations?user=' . urlencode($scopedId)));
     }
 
     /**
      * @NoAdminRequired
      */
     public function getConversation(string $id): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/v1/conversations/' . urlencode($id)));
+        $scopedId = $this->getScopedSessionId();
+        return new JSONResponse($this->openClaw->get('/api/v1/conversations/' . urlencode($id) . '?user=' . urlencode($scopedId)));
     }
 
     /**
      * @NoAdminRequired
      */
     public function deleteConversation(string $id): JSONResponse {
-        return new JSONResponse($this->openClaw->delete('/api/v1/conversations/' . urlencode($id)));
+        $scopedId = $this->getScopedSessionId();
+        return new JSONResponse($this->openClaw->delete('/api/v1/conversations/' . urlencode($id) . '?user=' . urlencode($scopedId)));
     }
 
     /**
