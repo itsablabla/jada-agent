@@ -15,6 +15,7 @@ export async function agentLoop({
   apiKey,
   mcpHub,
   onToken,
+  onReasoning,
   onToolCall,
   onToolResult,
 }) {
@@ -38,8 +39,24 @@ export async function agentLoop({
 
     // Only include tools if we have any
     if (tools.length > 0) {
-      // Limit tools to avoid token overflow — pick most relevant or cap at 128
-      const toolSubset = tools.slice(0, 128);
+      // Prioritize tools by server importance:
+      // 1. Nextcloud (primary mission — full Nextcloud control)
+      // 2. Composio (app integrations — meta-tools)
+      // 3. Rube (automation recipes)
+      // 4. Kuse (platform tools — fill remaining slots)
+      const TOOL_CAP = 200;
+      const priority = ["nextcloud", "composio", "rube"];
+      const prioritized = [];
+      const rest = [];
+      for (const t of tools) {
+        const server = t.function.name.split("__")[0];
+        if (priority.includes(server)) {
+          prioritized.push(t);
+        } else {
+          rest.push(t);
+        }
+      }
+      const toolSubset = [...prioritized, ...rest].slice(0, TOOL_CAP);
       requestParams.tools = toolSubset;
       requestParams.tool_choice = "auto";
     }
@@ -54,6 +71,11 @@ export async function agentLoop({
     for await (const chunk of stream) {
       const delta = chunk.choices?.[0]?.delta;
       if (!delta) continue;
+
+      // Reasoning/chain-of-thought content (OpenRouter extended fields)
+      if (delta.reasoning && onReasoning) {
+        onReasoning(delta.reasoning);
+      }
 
       // Text content
       if (delta.content) {
