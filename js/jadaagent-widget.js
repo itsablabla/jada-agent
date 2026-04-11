@@ -163,12 +163,12 @@
     if (!text) return '';
     if (typeof text !== 'string') text = String(text);
     return text
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
       .replace(/```([\s\S]*?)```/g, '<pre class="oc-code-block">$1</pre>')
       .replace(/`([^`]+)`/g, '<code class="oc-inline-code">$1</code>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" class="oc-link">$1</a>')
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, text, url) { if (/^javascript:/i.test(url)) return text; return '<a href="' + url + '" target="_blank" rel="noopener" class="oc-link">' + text + '</a>'; })
       .replace(/\n/g, '<br>');
   }
 
@@ -266,7 +266,7 @@
     isLoading = true;
 
     var conv = getConv(activeConvId);
-    if (!conv) return;
+    if (!conv) { isLoading = false; return; }
 
     // Reset activity
     activitySteps = [];
