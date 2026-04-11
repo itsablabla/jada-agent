@@ -40,6 +40,28 @@ class AgentController extends Controller {
     }
 
     /**
+     * Sanitize a client-supplied messages array: only allow 'user' and 'assistant'
+     * roles and strip anything else (e.g. 'system') to prevent prompt injection.
+     */
+    private function sanitizeMessages(array $messages): array {
+        $allowed = ['user', 'assistant'];
+        $clean = [];
+        foreach ($messages as $msg) {
+            if (!is_array($msg) || !isset($msg['role'], $msg['content'])) {
+                continue;
+            }
+            if (!in_array($msg['role'], $allowed, true)) {
+                continue;
+            }
+            $clean[] = [
+                'role' => $msg['role'],
+                'content' => (string) $msg['content'],
+            ];
+        }
+        return $clean;
+    }
+
+    /**
      * @NoAdminRequired
      */
     public function health(): JSONResponse {
@@ -63,9 +85,9 @@ class AgentController extends Controller {
         $messages = $this->request->getParam('messages', null);
         $scopedId = $this->getScopedSessionId();
 
-        // If a full messages array was provided, forward it for multi-turn context
+        // If a full messages array was provided, sanitize and forward for multi-turn context
         if (is_array($messages) && count($messages) > 0) {
-            $chatMessages = $messages;
+            $chatMessages = $this->sanitizeMessages($messages);
         } else {
             $chatMessages = [
                 ['role' => 'user', 'content' => $message],
@@ -105,7 +127,7 @@ class AgentController extends Controller {
         $scopedId = $this->getScopedSessionId();
 
         $chatMessages = (is_array($messages) && count($messages) > 0)
-            ? $messages
+            ? $this->sanitizeMessages($messages)
             : [['role' => 'user', 'content' => $message]];
 
         $result = $this->openClaw->postStream('/v1/chat/completions', [
@@ -130,7 +152,7 @@ class AgentController extends Controller {
         $scopedId = $this->getScopedSessionId();
 
         $chatMessages = (is_array($messages) && count($messages) > 0)
-            ? $messages
+            ? $this->sanitizeMessages($messages)
             : [['role' => 'user', 'content' => $message]];
 
         // Disable output buffering for real-time streaming
