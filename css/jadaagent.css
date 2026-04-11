@@ -1,0 +1,20 @@
+/* Jada Agent — Global Styles */
+#jada-agent-app {
+    height: calc(100vh - 50px);
+    margin: 0;
+    padding: 0;
+}
+
+#content-vue #jada-agent-app,
+#content #jada-agent-app {
+    height: calc(100vh - 50px);
+    margin: 0;
+    padding: 0;
+}
+
+/* Override Nextcloud's default content padding */
+#app-content-vue,
+#app-content {
+    padding: 0 !important;
+    overflow: hidden !important;
+}
