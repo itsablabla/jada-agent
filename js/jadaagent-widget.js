@@ -7,7 +7,7 @@
   'use strict';
 
   // ── Configuration ──────────────────────────────────────────────────
-  var OPENCLAW_URL = 'https://openclaw.garzaos.online';
+  var OPENCLAW_URL = 'https://research.garzaos.cloud/oc-api';
   var OPENCLAW_TOKEN = 'jada-agent-oc-key-2026';
   var OPENCLAW_MODEL = 'openclaw/main';
 
