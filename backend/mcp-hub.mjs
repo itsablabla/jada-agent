@@ -49,6 +49,14 @@ export class McpHub {
       },
       enabled: !!process.env.NEXTCLOUD_MCP_TOKEN,
     },
+    {
+      name: "rube",
+      url: "https://rube.app/mcp",
+      headers: {
+        Authorization: `Bearer ${process.env.RUBE_MCP_TOKEN || ""}`,
+      },
+      enabled: !!process.env.RUBE_MCP_TOKEN,
+    },
   ];
 
   async connectAll() {
