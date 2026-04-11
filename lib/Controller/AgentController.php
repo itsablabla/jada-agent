@@ -9,20 +9,34 @@ use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\IRequest;
+use OCP\IUserSession;
 
 /**
  * Proxy controller for OpenClaw Gateway API.
  */
 class AgentController extends Controller {
     private OpenClawService $openClaw;
+    private IUserSession $userSession;
 
     public function __construct(
         string $appName,
         IRequest $request,
-        OpenClawService $openClaw
+        OpenClawService $openClaw,
+        IUserSession $userSession
     ) {
         parent::__construct($appName, $request);
         $this->openClaw = $openClaw;
+        $this->userSession = $userSession;
+    }
+
+    /**
+     * Build a user-scoped session identifier to prevent cross-user data leakage.
+     */
+    private function getScopedSessionId(): string {
+        $user = $this->userSession->getUser();
+        $uid = $user ? $user->getUID() : 'anonymous';
+        $sessionId = $this->request->getParam('session_id', 'main');
+        return $uid . ':' . $sessionId;
     }
 
     /**
@@ -46,15 +60,23 @@ class AgentController extends Controller {
      */
     public function chat(): JSONResponse {
         $message = $this->request->getParam('message', '');
-        $sessionId = $this->request->getParam('session_id', 'main');
+        $messages = $this->request->getParam('messages', null);
+        $scopedId = $this->getScopedSessionId();
+
+        // If a full messages array was provided, forward it for multi-turn context
+        if (is_array($messages) && count($messages) > 0) {
+            $chatMessages = $messages;
+        } else {
+            $chatMessages = [
+                ['role' => 'user', 'content' => $message],
+            ];
+        }
 
         // OpenClaw uses OpenAI-compatible /v1/chat/completions
         $result = $this->openClaw->post('/v1/chat/completions', [
             'model' => 'openclaw:main',
-            'messages' => [
-                ['role' => 'user', 'content' => $message],
-            ],
-            'user' => $sessionId,
+            'messages' => $chatMessages,
+            'user' => $scopedId,
         ]);
 
         // Extract the assistant response from OpenAI format
@@ -79,15 +101,18 @@ class AgentController extends Controller {
      */
     public function chatStream(): DataResponse {
         $message = $this->request->getParam('message', '');
-        $sessionId = $this->request->getParam('session_id', 'main');
+        $messages = $this->request->getParam('messages', null);
+        $scopedId = $this->getScopedSessionId();
+
+        $chatMessages = (is_array($messages) && count($messages) > 0)
+            ? $messages
+            : [['role' => 'user', 'content' => $message]];
 
         $result = $this->openClaw->postStream('/v1/chat/completions', [
             'model' => 'openclaw:main',
             'stream' => true,
-            'messages' => [
-                ['role' => 'user', 'content' => $message],
-            ],
-            'user' => $sessionId,
+            'messages' => $chatMessages,
+            'user' => $scopedId,
         ]);
 
         return new DataResponse(['response' => $result]);
@@ -101,7 +126,12 @@ class AgentController extends Controller {
      */
     public function chatSSE(): void {
         $message = $this->request->getParam('message', '');
-        $sessionId = $this->request->getParam('session_id', 'main');
+        $messages = $this->request->getParam('messages', null);
+        $scopedId = $this->getScopedSessionId();
+
+        $chatMessages = (is_array($messages) && count($messages) > 0)
+            ? $messages
+            : [['role' => 'user', 'content' => $message]];
 
         // Disable output buffering for real-time streaming
         while (ob_get_level()) {
@@ -119,10 +149,8 @@ class AgentController extends Controller {
         $payload = json_encode([
             'model' => 'openclaw:main',
             'stream' => true,
-            'messages' => [
-                ['role' => 'user', 'content' => $message],
-            ],
-            'user' => $sessionId,
+            'messages' => $chatMessages,
+            'user' => $scopedId,
         ]);
 
         $ch = curl_init();
@@ -132,6 +160,8 @@ class AgentController extends Controller {
             CURLOPT_POSTFIELDS => $payload,
             CURLOPT_RETURNTRANSFER => false,
             CURLOPT_TIMEOUT => 180,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_HTTPHEADER => array_filter([
                 'Content-Type: application/json',
                 'Accept: text/event-stream',
