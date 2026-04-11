@@ -310,9 +310,8 @@
     scrollToBottom();
 
     // Build OpenAI-format messages (multi-turn context)
+    // buildOpenAIMessages already includes the user message from conv.messages
     var openaiMessages = buildOpenAIMessages(conv);
-    // The last user message is already in conv.messages; add it to the API call
-    openaiMessages.push({ role: 'user', content: userText });
 
     // Start elapsed timer
     if (activityTimer) clearInterval(activityTimer);
