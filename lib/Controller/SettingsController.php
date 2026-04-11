@@ -39,6 +39,21 @@ class SettingsController extends Controller {
         $token = $this->request->getParam('openclaw_token', '');
 
         if ($url) {
+            // Validate URL: must be HTTP(S) and not point to private/metadata IPs
+            if (!filter_var($url, FILTER_VALIDATE_URL) || !preg_match('#^https?://#i', $url)) {
+                return new JSONResponse(['status' => 'error', 'message' => 'Invalid URL: must be a valid HTTP or HTTPS URL'], 400);
+            }
+            $host = parse_url($url, PHP_URL_HOST);
+            if ($host) {
+                $ip = gethostbyname($host);
+                if ($ip && (
+                    str_starts_with($ip, '169.254.') ||   // link-local / cloud metadata
+                    str_starts_with($ip, '127.') ||        // loopback
+                    $ip === '0.0.0.0'
+                )) {
+                    return new JSONResponse(['status' => 'error', 'message' => 'Invalid URL: blocked destination'], 400);
+                }
+            }
             $this->config->setAppValue('jadaagent', 'openclaw_url', rtrim($url, '/'));
         }
         if ($token !== '' && $token !== '••••••••') {
