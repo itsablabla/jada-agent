@@ -129,14 +129,14 @@ class AgentController extends Controller {
     }
 
     /**
-     * @NoAdminRequired
+     * Admin only — returns OpenClaw config which may contain sensitive data.
      */
     public function getConfig(): JSONResponse {
         return new JSONResponse($this->openClaw->get('/api/v1/config'));
     }
 
     /**
-     * @NoAdminRequired
+     * Admin only — returns OpenClaw session data.
      */
     public function getSessions(): JSONResponse {
         return new JSONResponse($this->openClaw->get('/api/v1/sessions'));

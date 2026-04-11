@@ -22,7 +22,7 @@ class SettingsController extends Controller {
     }
 
     /**
-     * @NoAdminRequired
+     * Admin only — read OpenClaw connection settings.
      */
     public function getSettings(): JSONResponse {
         return new JSONResponse([
@@ -41,8 +41,10 @@ class SettingsController extends Controller {
         if ($url) {
             $this->config->setAppValue('jadaagent', 'openclaw_url', rtrim($url, '/'));
         }
-        if ($token && $token !== '••••••••') {
+        if ($token !== '' && $token !== '••••••••') {
             $this->config->setAppValue('jadaagent', 'openclaw_token', $token);
+        } elseif ($token === '') {
+            $this->config->deleteAppValue('jadaagent', 'openclaw_token');
         }
 
         return new JSONResponse(['status' => 'ok']);
