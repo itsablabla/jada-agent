@@ -41,6 +41,14 @@ export class McpHub {
       },
       enabled: !!process.env.PROTONMAIL_MCP_TOKEN,
     },
+    {
+      name: "nextcloud",
+      url: "https://mcp-next.garzaos.online/mcp",
+      headers: {
+        Authorization: `Bearer ${process.env.NEXTCLOUD_MCP_TOKEN || ""}`,
+      },
+      enabled: !!process.env.NEXTCLOUD_MCP_TOKEN,
+    },
   ];
 
   async connectAll() {

@@ -40,6 +40,17 @@ Kuse provides platform management, file operations, and Blinko note storage.
 - Use \`kuse__blinko_list_notes\` to search/list notes
 - Use Kuse API tools for user management and platform operations
 
+### Nextcloud Tools (Files, Calendar, Contacts & More)
+Nextcloud provides cloud storage, collaboration, and productivity tools.
+- File operations: list, read, write, delete, search, share files and folders
+- Calendar: create/read/update/delete events and calendars
+- Contacts: manage address books and contacts
+- Users & groups: manage Nextcloud users and group memberships
+- Shares: create and manage file/folder sharing links
+- Activity: view recent activity feeds
+- Notes, tasks, and more
+- Tools are prefixed with \`nextcloud__\`
+
 ## Guidelines
 1. When asked to do something, first check if you have an appropriate tool
 2. If unsure which tool to use, search with Composio's search tool
