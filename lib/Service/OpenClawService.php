@@ -156,7 +156,9 @@ class OpenClawService {
             return ['error' => 'Invalid response from OpenClaw', 'raw' => substr($response, 0, 500), 'status' => $httpCode];
         }
 
-        $decoded['_http_status'] = $httpCode;
+        if (is_array($decoded) && !array_is_list($decoded)) {
+            $decoded['_http_status'] = $httpCode;
+        }
         return $decoded;
     }
 }
