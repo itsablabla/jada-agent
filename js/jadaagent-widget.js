@@ -1,18 +1,22 @@
-// Jada Chat Widget for Nextcloud — v3.0
+// Jada Chat Widget for Nextcloud — v4.0 (Native OpenClaw)
+// Connects DIRECTLY to OpenClaw gateway via OpenAI-compatible streaming API.
+// No PHP middleman — browser talks straight to OpenClaw for zero-latency SSE.
 // Features: real-time SSE streaming, expand/collapse activity feed, persistent memory,
-// conversation history, live tool indicators, auto-scroll
-// Proxies through Jada Agent app (same-origin) to avoid CORS
+// conversation history (multi-turn), live tool indicators, auto-scroll
 (function() {
   'use strict';
 
   // ── Configuration ──────────────────────────────────────────────────
-  var SSE_API = '/apps/jadaagent/api/chat/sse';
-  var FALLBACK_API = '/apps/jadaagent/api/chat';
+  // OpenClaw gateway — direct connection (no PHP proxy)
+  var OPENCLAW_URL = 'https://openclaw.garzaos.online';
+  var OPENCLAW_TOKEN = 'jada-agent-oc-key-2026';
+  var OPENCLAW_MODEL = 'openclaw';
+
   var STORAGE_KEY = 'jada-conversations';
   var ACTIVE_KEY = 'jada-active-conv';
   var MAX_CONVERSATIONS = 50;
-  var MAX_HISTORY = 20;
-  var CONTEXT_WINDOW = 6;
+  var MAX_HISTORY = 40;       // OpenAI messages array — keep more turns
+  var CONTEXT_WINDOW = 12;    // recent messages sent per request
 
   // ── State ──────────────────────────────────────────────────────────
   var conversations = [];
@@ -23,11 +27,12 @@
   var healthOk = false;
   var healthTimer = null;
   var unreadCount = 0;
+  var abortController = null;
 
   // Activity feed state
-  var activitySteps = [];       // [{id, label, icon, status, content, startTime, endTime, expanded}]
+  var activitySteps = [];
   var stepIdCounter = 0;
-  var streamBuffer = '';         // accumulated full response text
+  var streamBuffer = '';
   var currentStepId = null;
   var activityTimer = null;
 
@@ -62,6 +67,7 @@
     done: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 8l2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     error: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 5v4M8 11v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
     generating: '<svg viewBox="0 0 16 16"><path d="M8 2v2M8 12v2M2 8h2M12 8h2M4 4l1.5 1.5M10.5 10.5L12 12M12 4l-1.5 1.5M5.5 10.5L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="2s" repeatCount="indefinite"/></path></svg>',
+    tool: '<svg viewBox="0 0 16 16"><path d="M10 2l4 4-6 6-4-4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 14l3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
   };
 
   // ── Storage ────────────────────────────────────────────────────────
@@ -102,7 +108,6 @@
       id: 'conv_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
       title: 'New conversation',
       messages: [],
-      history: [],
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
@@ -152,13 +157,6 @@
   }
 
   // ── Helpers ────────────────────────────────────────────────────────
-  function getRequestToken() {
-    if (typeof OC !== 'undefined' && OC.requestToken) return OC.requestToken;
-    var meta = document.querySelector('head[data-requesttoken]');
-    if (meta) return meta.getAttribute('data-requesttoken');
-    return '';
-  }
-
   function mdLite(text) {
     if (!text) return '';
     if (typeof text !== 'string') text = String(text);
@@ -192,11 +190,42 @@
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  // ── Health Check ───────────────────────────────────────────────────
+  // ── Build OpenAI messages array from conversation ─────────────────
+  function buildOpenAIMessages(conv) {
+    var msgs = [];
+
+    // System prompt for Jada
+    msgs.push({
+      role: 'system',
+      content: 'You are Jada, an AI assistant embedded in a Nextcloud environment. ' +
+        'You have access to tools for managing files, calendars, contacts, and more via MCP servers. ' +
+        'Be concise and helpful. Use markdown formatting when appropriate. ' +
+        'The current user is a Nextcloud administrator.'
+    });
+
+    // Gather recent conversation messages (excluding system messages and streaming)
+    var recentMsgs = conv.messages.filter(function(m) {
+      return (m.role === 'user' || m.role === 'assistant') && !m._streaming && m.text;
+    });
+
+    // Take the last CONTEXT_WINDOW messages for context
+    var contextMsgs = recentMsgs.slice(-CONTEXT_WINDOW);
+
+    for (var i = 0; i < contextMsgs.length; i++) {
+      msgs.push({
+        role: contextMsgs[i].role,
+        content: contextMsgs[i].text
+      });
+    }
+
+    return msgs;
+  }
+
+  // ── Health Check — direct to OpenClaw gateway ─────────────────────
   function checkHealth() {
-    fetch('/apps/jadaagent/api/health', {
+    fetch(OPENCLAW_URL + '/health', {
       method: 'GET',
-      headers: { 'requesttoken': getRequestToken() }
+      headers: { 'Authorization': 'Bearer ' + OPENCLAW_TOKEN }
     })
     .then(function(r) {
       healthOk = r.ok;
@@ -214,13 +243,12 @@
       id: ++stepIdCounter,
       label: label,
       icon: icon || 'think',
-      status: status || 'active',  // active, done, error
+      status: status || 'active',
       content: '',
       startTime: Date.now(),
       endTime: null,
       expanded: true
     };
-    // Collapse all previous steps
     for (var i = 0; i < activitySteps.length; i++) {
       activitySteps[i].expanded = false;
     }
@@ -251,7 +279,6 @@
   }
 
   function detectStepFromContent(newText) {
-    // Check if new content matches a step pattern
     for (var i = 0; i < STEP_PATTERNS.length; i++) {
       if (STEP_PATTERNS[i].pattern.test(newText)) {
         return { label: STEP_PATTERNS[i].label, icon: STEP_PATTERNS[i].icon };
@@ -260,7 +287,7 @@
     return null;
   }
 
-  // ── SSE Streaming Chat ─────────────────────────────────────────────
+  // ── Direct OpenClaw Streaming Chat ────────────────────────────────
   function sendToAgent(userText) {
     if (isLoading) return;
     isLoading = true;
@@ -274,7 +301,7 @@
     currentStepId = null;
 
     // Create initial "connecting" step
-    createStep('Connecting to Jada...', 'connect', 'active');
+    createStep('Connecting to OpenClaw...', 'connect', 'active');
 
     // Add placeholder assistant message
     var assistantMsg = { role: 'assistant', text: '', _streaming: true };
@@ -282,14 +309,10 @@
     renderMessages();
     scrollToBottom();
 
-    // Build context
-    var contextMsg = userText;
-    if (conv.history.length > 0) {
-      var lastFew = conv.history.slice(-CONTEXT_WINDOW);
-      var ctx = lastFew.map(function(m) { return m.role + ': ' + m.text; }).join('\n');
-      contextMsg = '[Previous context]\n' + ctx + '\n[Current message]\n' + userText;
-    }
-    conv.history.push({ role: 'user', text: userText });
+    // Build OpenAI-format messages (multi-turn context)
+    var openaiMessages = buildOpenAIMessages(conv);
+    // The last user message is already in conv.messages; add it to the API call
+    openaiMessages.push({ role: 'user', content: userText });
 
     // Start elapsed timer
     if (activityTimer) clearInterval(activityTimer);
@@ -297,45 +320,42 @@
       if (isLoading) renderActivityFeed();
     }, 1000);
 
-    // Try SSE first, fallback to regular fetch
-    streamViaSSE(contextMsg, assistantMsg, conv, function(success) {
-      if (!success) {
-        // Fallback to non-streaming
-        fetchFallback(contextMsg, assistantMsg, conv);
-      }
-    });
+    // Abort controller for cancellation
+    abortController = new AbortController();
+
+    streamFromOpenClaw(openaiMessages, assistantMsg, conv);
   }
 
-  function streamViaSSE(message, assistantMsg, conv, callback) {
+  function streamFromOpenClaw(openaiMessages, assistantMsg, conv) {
     var thinkingStep = null;
     var generatingStep = null;
     var firstChunkReceived = false;
     var lastContentLength = 0;
-    var aborted = false;
-    var callbackCalled = false;
+    var finished = false;
+    var connectStartTime = Date.now();
 
-    function safeCallback(val) {
-      if (callbackCalled) return;
-      callbackCalled = true;
-      callback(val);
-    }
-
-    fetch(SSE_API, {
+    fetch(OPENCLAW_URL + '/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'requesttoken': getRequestToken()
+        'Authorization': 'Bearer ' + OPENCLAW_TOKEN
       },
-      body: JSON.stringify({ message: message })
+      body: JSON.stringify({
+        model: OPENCLAW_MODEL,
+        messages: openaiMessages,
+        stream: true
+      }),
+      signal: abortController ? abortController.signal : undefined
     })
     .then(function(response) {
       if (!response.ok) {
-        safeCallback(false);
-        return;
+        throw new Error('OpenClaw HTTP ' + response.status);
       }
 
-      // Complete "connecting" step
+      // Complete "connecting" step — show how fast the connection was
+      var connectMs = Date.now() - connectStartTime;
       if (activitySteps.length > 0) {
+        activitySteps[0].label = 'Connected (' + formatMs(connectMs) + ')';
         completeStep(activitySteps[0].id, 'done');
       }
 
@@ -348,7 +368,7 @@
 
       function processChunk() {
         reader.read().then(function(result) {
-          if (result.done || aborted) {
+          if (result.done || finished) {
             finishStream();
             return;
           }
@@ -357,7 +377,7 @@
 
           // Parse SSE lines
           var lines = sseBuffer.split('\n');
-          sseBuffer = lines.pop() || ''; // keep incomplete line
+          sseBuffer = lines.pop() || '';
 
           for (var i = 0; i < lines.length; i++) {
             var line = lines[i].trim();
@@ -371,12 +391,21 @@
 
             try {
               var data = JSON.parse(dataStr);
-              var delta = data.choices && data.choices[0] && data.choices[0].delta;
+              var choice = data.choices && data.choices[0];
+              if (!choice) continue;
+
+              var delta = choice.delta;
+              var finishReason = choice.finish_reason;
+
+              // Handle content streaming
               if (delta && delta.content) {
                 if (!firstChunkReceived) {
                   firstChunkReceived = true;
-                  // Complete thinking step, start generating
-                  if (thinkingStep) completeStep(thinkingStep.id, 'done');
+                  var thinkMs = Date.now() - (thinkingStep ? thinkingStep.startTime : connectStartTime);
+                  if (thinkingStep) {
+                    thinkingStep.label = 'Thought (' + formatMs(thinkMs) + ')';
+                    completeStep(thinkingStep.id, 'done');
+                  }
                   generatingStep = createStep('Generating response...', 'generating', 'active');
                 }
 
@@ -398,20 +427,38 @@
                 renderStreamingMessage();
                 scrollToBottom();
               }
+
+              // Handle tool calls (OpenClaw may include these)
+              if (delta && delta.tool_calls) {
+                for (var tc = 0; tc < delta.tool_calls.length; tc++) {
+                  var toolCall = delta.tool_calls[tc];
+                  if (toolCall.function && toolCall.function.name) {
+                    var toolName = toolCall.function.name;
+                    if (generatingStep) completeStep(generatingStep.id, 'done');
+                    generatingStep = createStep('Using tool: ' + toolName, 'tool', 'active');
+                  }
+                }
+              }
+
+              // Handle finish
+              if (finishReason === 'stop' || finishReason === 'tool_calls') {
+                finishStream();
+                return;
+              }
             } catch(e) {
-              // ignore parse errors
+              // ignore parse errors for partial JSON
             }
           }
 
           processChunk();
         }).catch(function(err) {
-          if (!aborted) finishStream();
+          if (!finished && err.name !== 'AbortError') finishStream();
         });
       }
 
       function finishStream() {
-        if (aborted) return;
-        aborted = true;
+        if (finished) return;
+        finished = true;
 
         // Complete any remaining active steps
         for (var i = 0; i < activitySteps.length; i++) {
@@ -420,19 +467,19 @@
           }
         }
 
-        // Add final "done" step
+        // Add final "done" step with total time
         var totalMs = activitySteps.length > 0
           ? Date.now() - activitySteps[0].startTime
           : 0;
         createStep('Complete (' + formatMs(totalMs) + ')', 'done', 'done');
 
-        // Finalize
+        // Finalize message
         delete assistantMsg._streaming;
-        conv.history.push({ role: 'assistant', text: streamBuffer });
-        if (conv.history.length > MAX_HISTORY) conv.history = conv.history.slice(-MAX_HISTORY);
+        if (!assistantMsg.text && streamBuffer) assistantMsg.text = streamBuffer;
         conv.updatedAt = Date.now();
         updateConvTitle(conv);
         isLoading = false;
+        abortController = null;
         if (activityTimer) { clearInterval(activityTimer); activityTimer = null; }
         saveConversations();
         renderMessages();
@@ -448,58 +495,14 @@
         }, 4000);
 
         if (!chatOpen) { unreadCount++; renderBadge(); }
-        safeCallback(true);
       }
 
       processChunk();
     })
     .catch(function(err) {
-      safeCallback(false);
-    });
-  }
+      if (err.name === 'AbortError') return;
 
-  function fetchFallback(message, assistantMsg, conv) {
-    // Complete connecting step
-    if (activitySteps.length > 0) completeStep(activitySteps[0].id, 'done');
-    var thinkStep = createStep('Thinking...', 'think', 'active');
-
-    fetch(FALLBACK_API, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'requesttoken': getRequestToken()
-      },
-      body: JSON.stringify({ message: message })
-    })
-    .then(function(r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    })
-    .then(function(data) {
-      completeStep(thinkStep.id, 'done');
-      createStep('Complete', 'done', 'done');
-
-      var responseText = data.response || data.message || '(No response)';
-      assistantMsg.text = responseText;
-      delete assistantMsg._streaming;
-      conv.history.push({ role: 'assistant', text: responseText });
-      if (conv.history.length > MAX_HISTORY) conv.history = conv.history.slice(-MAX_HISTORY);
-      conv.updatedAt = Date.now();
-      updateConvTitle(conv);
-      isLoading = false;
-      if (activityTimer) { clearInterval(activityTimer); activityTimer = null; }
-      saveConversations();
-      renderMessages();
-      renderSidebar();
-      scrollToBottom();
-
-      setTimeout(function() {
-        if (!isLoading) { activitySteps = []; renderActivityFeed(); }
-      }, 4000);
-
-      if (!chatOpen) { unreadCount++; renderBadge(); }
-    })
-    .catch(function(err) {
+      // Mark all active steps as error
       for (var i = 0; i < activitySteps.length; i++) {
         if (activitySteps[i].status === 'active') completeStep(activitySteps[i].id, 'error');
       }
@@ -508,8 +511,9 @@
       delete assistantMsg._streaming;
       var idx = conv.messages.indexOf(assistantMsg);
       if (idx >= 0 && !assistantMsg.text) conv.messages.splice(idx, 1);
-      conv.messages.push({ role: 'system', text: 'Error: ' + err.message });
+      conv.messages.push({ role: 'system', text: 'Connection error: ' + err.message });
       isLoading = false;
+      abortController = null;
       if (activityTimer) { clearInterval(activityTimer); activityTimer = null; }
       saveConversations();
       renderMessages();
@@ -574,7 +578,7 @@
       '.oc-msg .oc-code-block{background:#111;color:#cdd6f4;padding:8px 10px;border-radius:6px;overflow-x:auto;font-size:12px;margin:6px 0;font-family:"SF Mono","Fira Code",monospace;}',
       '.oc-msg .oc-inline-code{background:#1e1e2e;color:#cdd6f4;padding:1px 5px;border-radius:3px;font-size:12px;font-family:"SF Mono","Fira Code",monospace;}',
 
-      // ── Activity Feed (the main new feature) ──
+      // Activity Feed
       '#oc-activity-feed{padding:0;max-height:0;overflow:hidden;background:#0a0a0a;border-top:1px solid transparent;transition:max-height .3s ease,padding .3s ease;flex-shrink:0;}',
       '#oc-activity-feed.active{max-height:200px;padding:6px 10px;border-top-color:#1a1a1a;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#222 transparent;}',
 
@@ -599,11 +603,9 @@
       '.oc-step-body.expanded{max-height:100px;padding:0 10px 6px;}',
       '.oc-step-body-content{font-size:11px;color:#666;line-height:1.4;}',
 
-      // Spinner for active steps
       '.oc-step-spinner{width:14px;height:14px;border:2px solid #1a2a3a;border-top-color:#0082c9;border-radius:50%;animation:oc-spin .7s linear infinite;flex-shrink:0;}',
       '@keyframes oc-spin{to{transform:rotate(360deg);}}',
 
-      // Streaming cursor
       '.oc-cursor{display:inline-block;width:2px;height:14px;background:#0082c9;margin-left:2px;animation:oc-blink .8s step-end infinite;vertical-align:text-bottom;}',
       '@keyframes oc-blink{0%,100%{opacity:1;}50%{opacity:0;}}',
 
@@ -616,6 +618,9 @@
       '#oc-chat-send:hover:not(:disabled){transform:scale(1.05);}',
       '#oc-chat-send:disabled{opacity:0.3;cursor:default;}',
       '#oc-chat-send svg{width:18px;height:18px;fill:white;}',
+      '#oc-chat-stop{width:36px;height:36px;border-radius:50%;border:none;background:#e53935;cursor:pointer;display:none;align-items:center;justify-content:center;flex-shrink:0;transition:transform .15s;}',
+      '#oc-chat-stop:hover{transform:scale(1.05);}',
+      '#oc-chat-stop svg{width:16px;height:16px;fill:white;}',
 
       // Welcome
       '.oc-welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#555;text-align:center;padding:24px;gap:4px;}',
@@ -638,6 +643,7 @@
 
     var chatSvg = '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z"/><path d="M7 9h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2z"/></svg>';
     var sendSvg = '<svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>';
+    var stopSvg = '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
 
     // FAB
     var btn = document.createElement('button');
@@ -671,6 +677,7 @@
       '    <div id="oc-chat-input-area">',
       '      <textarea id="oc-chat-textarea" placeholder="Type a message..." rows="1"></textarea>',
       '      <button id="oc-chat-send" title="Send">' + sendSvg + '</button>',
+      '      <button id="oc-chat-stop" title="Stop generating">' + stopSvg + '</button>',
       '    </div>',
       '  </div>',
       '</div>'
@@ -683,6 +690,7 @@
     document.getElementById('oc-btn-new').onclick = function() { newConversation(false); };
     document.getElementById('oc-btn-history').onclick = toggleSidebar;
     document.getElementById('oc-chat-send').onclick = sendMessage;
+    document.getElementById('oc-chat-stop').onclick = stopGeneration;
 
     var textarea = document.getElementById('oc-chat-textarea');
     textarea.addEventListener('keydown', function(e) {
@@ -758,6 +766,33 @@
     sendToAgent(text);
   }
 
+  function stopGeneration() {
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
+    isLoading = false;
+    for (var i = 0; i < activitySteps.length; i++) {
+      if (activitySteps[i].status === 'active') completeStep(activitySteps[i].id, 'done');
+    }
+    createStep('Stopped by user', 'done', 'done');
+    if (activityTimer) { clearInterval(activityTimer); activityTimer = null; }
+
+    // Finalize any streaming message
+    var conv = getConv(activeConvId);
+    if (conv) {
+      for (var j = 0; j < conv.messages.length; j++) {
+        if (conv.messages[j]._streaming) {
+          delete conv.messages[j]._streaming;
+          if (!conv.messages[j].text) conv.messages[j].text = '(Stopped)';
+        }
+      }
+      saveConversations();
+    }
+    updateSendButton();
+    renderMessages();
+  }
+
   function clearChat() {
     var conv = getConv(activeConvId);
     if (!conv) return;
@@ -765,6 +800,7 @@
     isLoading = false;
     activitySteps = [];
     if (activityTimer) { clearInterval(activityTimer); activityTimer = null; }
+    if (abortController) { abortController.abort(); abortController = null; }
     saveConversations();
     renderMessages();
     renderActivityFeed();
@@ -784,7 +820,7 @@
         '  <svg class="oc-welcome-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>',
         '  <p><strong>Jada</strong></p>',
         '  <p>Your AI assistant</p>',
-        '  <p class="oc-welcome-hint">Conversations are saved automatically</p>',
+        '  <p class="oc-welcome-hint">Connected directly to OpenClaw</p>',
         '</div>'
       ].join('');
       updateSendButton();
@@ -797,10 +833,8 @@
       var cls = m.role === 'user' ? 'user' : (m.role === 'system' ? 'system' : 'assistant');
 
       if (m._streaming && m.text) {
-        // Live streaming message — show with cursor
         html += '<div class="oc-msg assistant" id="oc-streaming-msg">' + mdLite(m.text) + '<span class="oc-cursor"></span></div>';
       } else if (m._streaming && !m.text) {
-        // Empty streaming placeholder — skip, activity feed shows status
         continue;
       } else {
         html += '<div class="oc-msg ' + cls + '">' + mdLite(m.text || '') + '</div>';
@@ -817,7 +851,6 @@
     if (el) {
       el.innerHTML = mdLite(streamBuffer) + '<span class="oc-cursor"></span>';
     } else {
-      // Element doesn't exist yet, re-render
       renderMessages();
     }
   }
@@ -866,7 +899,6 @@
 
     feed.innerHTML = html;
 
-    // Attach toggle listeners
     var stepHeaders = feed.querySelectorAll('.oc-step-header');
     for (var j = 0; j < stepHeaders.length; j++) {
       (function(header) {
@@ -882,7 +914,6 @@
       })(stepHeaders[j]);
     }
 
-    // Auto-scroll the feed
     feed.scrollTop = feed.scrollHeight;
   }
 
@@ -932,6 +963,9 @@
 
   function updateSendButton() {
     var sendBtn = document.getElementById('oc-chat-send');
+    var stopBtn = document.getElementById('oc-chat-stop');
+    if (sendBtn) sendBtn.style.display = isLoading ? 'none' : 'flex';
+    if (stopBtn) stopBtn.style.display = isLoading ? 'flex' : 'none';
     if (sendBtn) sendBtn.disabled = isLoading;
   }
 
@@ -965,7 +999,7 @@
   // ── Init ───────────────────────────────────────────────────────────
   function init() {
     if (document.getElementById('body-login') || document.getElementById('body-public')) return;
-    console.log('[Jada] v3.0 — SSE streaming + activity feed');
+    console.log('[Jada] v4.0 — Native OpenClaw (direct SSE, no PHP proxy)');
 
     loadConversations();
     createWidget();
@@ -981,7 +1015,8 @@
       return {
         healthOk: healthOk, isLoading: isLoading, chatOpen: chatOpen,
         conversations: conversations.length, activeConvId: activeConvId,
-        activitySteps: activitySteps.length, streamBuffer: streamBuffer.length
+        activitySteps: activitySteps.length, streamBuffer: streamBuffer.length,
+        openclawUrl: OPENCLAW_URL
       };
     },
     getConversations: function() { return conversations; },
