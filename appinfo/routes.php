@@ -10,6 +10,7 @@ return [
         ['name' => 'agent#healthDetail', 'url' => '/api/health/detail', 'verb' => 'GET'],
         ['name' => 'agent#chat', 'url' => '/api/chat', 'verb' => 'POST'],
         ['name' => 'agent#chatStream', 'url' => '/api/chat/stream', 'verb' => 'POST'],
+        ['name' => 'agent#chatSSE', 'url' => '/api/chat/sse', 'verb' => 'POST'],
         ['name' => 'agent#getConversations', 'url' => '/api/conversations', 'verb' => 'GET'],
         ['name' => 'agent#getConversation', 'url' => '/api/conversations/{id}', 'verb' => 'GET'],
         ['name' => 'agent#deleteConversation', 'url' => '/api/conversations/{id}', 'verb' => 'DELETE'],
