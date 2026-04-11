@@ -3,6 +3,11 @@
 // No PHP proxy, no WebSocket device pairing — native OpenClaw channel with bearer token.
 // Features: SSE streaming, expand/collapse activity feed, persistent memory,
 // conversation history (multi-turn), live connection status, AbortController stop
+//
+// NOTE: JSLoader wraps this snippet in window.addEventListener('DOMContentLoaded', () => { ... });
+// Since DOMContentLoaded has already fired by the time JSLoader's <script> loads,
+// we escape the wrapper by closing it immediately and re-opening a dummy at the end.
+}); // ← close JSLoader's DOMContentLoaded wrapper so our code runs at top level
 (function() {
   'use strict';
 
@@ -1039,3 +1044,5 @@
     init();
   }
 })();
+// Re-open a dummy DOMContentLoaded listener to match JSLoader's closing `});`
+window.addEventListener('DOMContentLoaded', function() {
