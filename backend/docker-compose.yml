@@ -1,0 +1,53 @@
+# Hermes — Jada Agent Backend Stack
+# Native deployment for the Nextcloud Jada Agent app.
+# Run from the backend/ directory: docker compose up -d
+#
+# Requires a .env file with at minimum:
+#   OPENROUTER_API_KEY=sk-or-...
+#   COMPOSIO_MCP_API_KEY=...
+#   VAULT_MCP_BEARER_TOKEN=...
+#   PROTONMAIL_MCP_TOKEN=...
+#   TELEGRAM_BOT_TOKEN=...  (optional — omit to skip Telegram)
+
+services:
+  hermes:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jada-hermes
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - PORT=3200
+      - NODE_ENV=production
+    ports:
+      - "3200:3200"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3200/health').then(r=>{if(!r.ok)throw 1}).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  telegram:
+    build:
+      context: .
+      dockerfile: Dockerfile.telegram
+    container_name: jada-telegram
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - JADA_API_URL=http://hermes:3200
+    depends_on:
+      hermes:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

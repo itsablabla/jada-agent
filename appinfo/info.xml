@@ -4,22 +4,29 @@
     <id>jadaagent</id>
     <name>Jada Agent</name>
     <namespace>JadaAgent</namespace>
-    <summary>AI Agent powered by OpenClaw — autonomous tasks, skills, and MCP tools</summary>
+    <summary>AI Agent powered by Hermes — autonomous tasks, workspaces, MCP tools, and Telegram bot</summary>
     <description><![CDATA[
-**Jada Agent** brings autonomous AI agent capabilities to your Nextcloud, powered by [OpenClaw](https://openclaw.ai).
+**Jada Agent** brings autonomous AI agent capabilities to your Nextcloud, powered by [Hermes](https://github.com/itsablabla/jada-agent) — the GARZA OS super agent backend.
 
 ### Features
 
-- **Dashboard** — Real-time agent health, activity feed, and quick actions
-- **Chat** — Converse with your AI agent directly from Nextcloud
-- **Skills** — Manage installed skills and MCP server connections
-- **Schedules** — Create recurring or one-time automated jobs
-- **Settings** — Configure OpenClaw connection, model selection, and identity
+- **Workspaces** — Organize conversations by project (Kuse, Nomad Internet, GARZA OS, etc.)
+- **Chat** — Full-page AI chat with SSE streaming and inline tool-call visualization
+- **MCP Tools** — 406+ tools across 6 servers (Nextcloud, Composio, Kuse, Vault, ProtonMail, Rube)
+- **Telegram Bot** — Same agent, same conversation memory, native Telegram formatting
+- **Document Editor** — AI-assisted document editing with inline suggestions
+- **Per-User Isolation** — Each Nextcloud user gets isolated chat history and workspaces
+
+### Architecture
+
+- **Hermes Backend** — Node.js MCP hub + agent loop (Docker container, port 3200)
+- **Telegram Bot** — Separate container sharing Hermes conversation memory
+- **Nextcloud App** — Vue.js 3 frontend + PHP proxy controllers
 
 ### Requirements
 
-- OpenClaw instance (self-hosted Docker container)
-- API key for your LLM provider (OpenRouter, Anthropic, OpenAI, etc.)
+- Hermes backend (bundled Docker Compose in `backend/`)
+- OpenRouter API key (or any OpenAI-compatible provider)
     ]]></description>
     <version>0.2.3</version>
     <licence>AGPL-3.0-or-later</licence>

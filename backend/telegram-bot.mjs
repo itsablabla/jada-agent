@@ -1,82 +1,146 @@
 /**
- * Telegram bot that routes messages through the Jada Agent Backend.
- * Shares the same conversation memory as the web widget via conversation_id.
+ * Telegram bot for Jada AI — GARZA OS super agent.
  *
- * Each Telegram chat gets a conversation_id like "telegram-<chatId>",
- * but the user can also link their widget session via /link <id>.
+ * Key design: the bot KNOWS it's Telegram and tells the backend so the
+ * system prompt adapts (concise responses, Telegram Markdown, no UI refs).
+ *
+ * Shares conversation memory with the Nextcloud web UI via conversation_id.
+ * Each Telegram chat → "telegram-<chatId>", linkable via /link <id>.
  */
 import TelegramBot from "node-telegram-bot-api";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const JADA_API_URL = process.env.JADA_API_URL || "http://localhost:3200";
-const JADA_BEARER = process.env.JADA_BEARER_TOKEN || "jada-chat-2026";
+const JADA_BEARER = process.env.JADA_BEARER_TOKEN || process.env.BEARER_TOKEN || "jada-chat-2026";
 
 if (!BOT_TOKEN) {
   console.error("TELEGRAM_BOT_TOKEN is required");
   process.exit(1);
 }
 
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+// ── Bot Setup ───────────────────────────────────────────────────────
+// Use polling with automatic retry on 409 conflicts.
+const bot = new TelegramBot(BOT_TOKEN, {
+  polling: {
+    autoStart: true,
+    params: { timeout: 30 },
+  },
+});
 
-// Map Telegram chatId to conversationId (default: "telegram-<chatId>")
+// Track 409 errors and retry with backoff
+let conflictRetries = 0;
+const MAX_CONFLICT_RETRIES = 20;
+
+bot.on("polling_error", (err) => {
+  const msg = err?.message || "";
+  if (msg.includes("409") || msg.includes("Conflict")) {
+    conflictRetries++;
+    if (conflictRetries <= 3) {
+      console.warn(`[polling] 409 conflict #${conflictRetries} — another instance is polling. Retrying...`);
+    } else if (conflictRetries === MAX_CONFLICT_RETRIES) {
+      console.error(`[polling] 409 conflict persists after ${MAX_CONFLICT_RETRIES} retries. The other instance may need to be stopped manually.`);
+    }
+    // Library auto-retries, just log it
+  } else if (msg.includes("EFATAL") || msg.includes("ECONNREFUSED")) {
+    console.error("[polling] Fatal error:", msg);
+  }
+  // Don't log every single transient error
+});
+
+// Map Telegram chatId → conversationId (default: "telegram-<chatId>")
 const chatConvMap = new Map();
 
 function getConvId(chatId) {
   return chatConvMap.get(chatId) || `telegram-${chatId}`;
 }
 
-// /start command
+// ── Commands ────────────────────────────────────────────────────────
+
 bot.onText(/\/start/, (msg) => {
+  const name = msg.from?.first_name || "there";
   bot.sendMessage(
     msg.chat.id,
-    "Hey! I'm Jada, the GARZA OS AI assistant. I can manage your Nextcloud files, calendar, contacts, and more.\n\nJust send me a message and I'll use my tools to get it done.\n\n*Commands:*\n/link <id> — Link to a web widget conversation\n/unlink — Use a fresh Telegram conversation\n/status — Check backend health",
+    `Hey ${name}! 👋 I'm *Jada* — the GARZA OS AI agent.\n\n` +
+      `I have direct access to your Nextcloud (files, calendar, contacts, email), ` +
+      `500+ app integrations via Composio, Kuse, and more.\n\n` +
+      `Just type what you need — I'll execute it.\n\n` +
+      `*Commands:*\n` +
+      `/status — Backend health & MCP servers\n` +
+      `/link <id> — Share conversation with web UI\n` +
+      `/unlink — Fresh Telegram conversation\n` +
+      `/help — Show this message`,
     { parse_mode: "Markdown" }
   );
 });
 
-// /link command — share conversation with widget
+bot.onText(/\/help/, (msg) => {
+  bot.sendMessage(
+    msg.chat.id,
+    `*Jada AI — Telegram Bot*\n\n` +
+      `I'm the same agent you see in the Nextcloud web UI, but optimized for Telegram.\n\n` +
+      `*What I can do:*\n` +
+      `📁 Manage Nextcloud files, folders, shares\n` +
+      `📅 Calendar events, contacts, tasks\n` +
+      `📧 Read & send emails via ProtonMail\n` +
+      `🔑 Look up passwords in Bitwarden Vault\n` +
+      `🔧 500+ app integrations (GitHub, Gmail, Slack, etc.)\n` +
+      `⚡ Automate workflows with Rube\n\n` +
+      `Just type naturally — "list my files", "what's on my calendar today", "search passwords for AWS"`,
+    { parse_mode: "Markdown" }
+  );
+});
+
 bot.onText(/\/link (.+)/, (msg, match) => {
   const convId = match[1].trim();
   chatConvMap.set(msg.chat.id, convId);
-  bot.sendMessage(msg.chat.id, `Linked to conversation: \`${convId}\`\nI now share memory with that widget session.`, {
-    parse_mode: "Markdown",
-  });
+  bot.sendMessage(
+    msg.chat.id,
+    `Linked to conversation: \`${convId}\`\nI now share memory with that web session.`,
+    { parse_mode: "Markdown" }
+  );
 });
 
-// /unlink command
 bot.onText(/\/unlink/, (msg) => {
   chatConvMap.delete(msg.chat.id);
   bot.sendMessage(msg.chat.id, "Unlinked. Using fresh Telegram conversation.");
 });
 
-// /status command
 bot.onText(/\/status/, async (msg) => {
   try {
-    const res = await fetch(`${JADA_API_URL}/health`);
+    const res = await fetch(`${JADA_API_URL}/health`, {
+      headers: { Authorization: `Bearer ${JADA_BEARER}` },
+    });
     const data = await res.json();
     const servers = Object.entries(data.mcpServers || {})
-      .map(([name, info]) => `  ${info.status === "connected" ? "✓" : "✗"} ${name}: ${info.tools || 0} tools`)
+      .map(
+        ([name, info]) =>
+          `  ${info.status === "connected" ? "✅" : "❌"} ${name}: ${info.tools || 0} tools`
+      )
       .join("\n");
+    const totalTools = data.tools || Object.values(data.mcpServers || {}).reduce((s, i) => s + (i.tools || 0), 0);
     bot.sendMessage(
       msg.chat.id,
-      `*Backend Status*\nModel: ${data.model}\nTools: ${data.tools}\nConversations: ${data.conversations}\n\n*MCP Servers:*\n${servers}`,
+      `⚡ *Hermes Backend*\n` +
+        `Model: \`${data.model || "unknown"}\`\n` +
+        `Tools: ${totalTools}\n` +
+        `Conversations: ${data.conversations || 0}\n\n` +
+        `*MCP Servers:*\n${servers}`,
       { parse_mode: "Markdown" }
     );
   } catch (err) {
-    bot.sendMessage(msg.chat.id, `Backend unreachable: ${err.message}`);
+    bot.sendMessage(msg.chat.id, `❌ Backend unreachable: ${err.message}`);
   }
 });
 
-// Handle regular messages — route through Jada backend
+// ── Message Handler ─────────────────────────────────────────────────
+
 bot.on("message", async (msg) => {
-  // Skip commands
   if (msg.text?.startsWith("/")) return;
   if (!msg.text) return;
 
   const chatId = msg.chat.id;
   const convId = getConvId(chatId);
 
-  // Send "typing" indicator
   bot.sendChatAction(chatId, "typing");
 
   try {
@@ -85,28 +149,32 @@ bot.on("message", async (msg) => {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${JADA_BEARER}`,
-        "X-Conversation-Id": convId,
       },
       body: JSON.stringify({
         messages: [{ role: "user", content: msg.text }],
         conversation_id: convId,
+        channel: "telegram",
+        channel_meta: {
+          username: msg.from?.username || undefined,
+          chatTitle: msg.chat.title || msg.from?.first_name || undefined,
+          chatType: msg.chat.type,
+        },
       }),
     });
 
     if (!response.ok) {
       const err = await response.text();
-      bot.sendMessage(chatId, `Error: ${response.status} — ${err}`);
+      bot.sendMessage(chatId, `❌ Error ${response.status}: ${err.slice(0, 200)}`);
       return;
     }
 
-    // Read SSE stream and collect the full response
+    // Read SSE stream
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let fullText = "";
     let buffer = "";
     let currentEvent = "";
 
-    // Send typing every 4s while processing
     const typingInterval = setInterval(() => {
       bot.sendChatAction(chatId, "typing");
     }, 4000);
@@ -117,10 +185,8 @@ bot.on("message", async (msg) => {
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-
-        // Parse SSE events
         const lines = buffer.split("\n");
-        buffer = lines.pop() || ""; // keep incomplete line
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
           if (line.startsWith("event: ")) {
@@ -129,10 +195,8 @@ bot.on("message", async (msg) => {
             try {
               const data = JSON.parse(line.slice(6));
               if (currentEvent === "step_complete" && data.text) {
-                // step_complete carries the full assembled text
                 fullText = data.text;
               } else if (currentEvent === "step_delta" && data.text) {
-                // Accumulate deltas as they arrive
                 fullText += data.text;
               }
             } catch {
@@ -145,36 +209,79 @@ bot.on("message", async (msg) => {
       clearInterval(typingInterval);
     }
 
-    // Clean up tool indicators for Telegram (keep it readable)
+    // Light cleanup of any tool markers that leaked through
     let cleanText = fullText
       .replace(/🔧 \*Calling tool:\* `[^`]+`\n?/g, "")
       .replace(/[✅❌] \*Tool result:\* [^\n]*\n?\n?/g, "")
       .trim();
 
     if (!cleanText) {
-      cleanText = "Done. (tools executed but no text response)";
+      cleanText = "Done. (tools executed, no text output)";
     }
 
-    // Telegram has a 4096 char limit per message
-    if (cleanText.length > 4000) {
-      const chunks = cleanText.match(/.{1,4000}/gs) || [cleanText];
-      for (const chunk of chunks) {
-        await bot.sendMessage(chatId, chunk, { parse_mode: "Markdown" }).catch(() => {
-          // Fallback without markdown if parsing fails
-          bot.sendMessage(chatId, chunk);
-        });
-      }
-    } else {
-      await bot.sendMessage(chatId, cleanText, { parse_mode: "Markdown" }).catch(() => {
-        bot.sendMessage(chatId, cleanText);
-      });
-    }
+    await sendTelegramMessage(chatId, cleanText);
   } catch (err) {
     console.error("Error processing message:", err);
-    bot.sendMessage(chatId, `Sorry, something went wrong: ${err.message}`);
+    bot.sendMessage(chatId, `❌ Error: ${err.message}`);
   }
 });
 
-console.log("Jada Telegram Bot started — routing through Jada Agent Backend");
-console.log(`Backend: ${JADA_API_URL}`);
-console.log("Shared memory: enabled (conversation_id per chat)");
+/**
+ * Send a message to Telegram, handling the 4096 char limit and
+ * falling back from Markdown to plain text if parsing fails.
+ */
+async function sendTelegramMessage(chatId, text) {
+  const MAX_LEN = 4000;
+
+  if (text.length <= MAX_LEN) {
+    await bot.sendMessage(chatId, text, { parse_mode: "Markdown" }).catch(() => {
+      bot.sendMessage(chatId, text);
+    });
+    return;
+  }
+
+  const chunks = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= MAX_LEN) {
+      chunks.push(remaining);
+      break;
+    }
+    let splitIdx = remaining.lastIndexOf("\n\n", MAX_LEN);
+    if (splitIdx < MAX_LEN / 2) {
+      splitIdx = remaining.lastIndexOf("\n", MAX_LEN);
+    }
+    if (splitIdx < MAX_LEN / 2) {
+      splitIdx = MAX_LEN;
+    }
+    chunks.push(remaining.slice(0, splitIdx));
+    remaining = remaining.slice(splitIdx).trimStart();
+  }
+
+  for (const chunk of chunks) {
+    await bot.sendMessage(chatId, chunk, { parse_mode: "Markdown" }).catch(() => {
+      bot.sendMessage(chatId, chunk);
+    });
+  }
+}
+
+// ── Startup ─────────────────────────────────────────────────────────
+
+console.log("Jada Telegram Bot started");
+console.log(`  Backend: ${JADA_API_URL}`);
+console.log(`  Channel: telegram (agent is Telegram-aware)`);
+console.log(`  Shared memory: enabled (conversation_id per chat)`);
+console.log(`  Mode: long-polling`);
+
+// Graceful shutdown
+for (const sig of ["SIGTERM", "SIGINT"]) {
+  process.on(sig, () => {
+    console.log(`Received ${sig}, stopping Telegram bot...`);
+    bot.stopPolling();
+    process.exit(0);
+  });
+}
+
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled rejection:", err);
+});

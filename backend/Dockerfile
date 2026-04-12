@@ -3,5 +3,5 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --production
 COPY *.mjs ./
-EXPOSE 3000
+EXPOSE 3200
 CMD ["node", "server.mjs"]

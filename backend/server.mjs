@@ -123,13 +123,20 @@ app.post("/api/reconnect", async (req, res) => {
 app.post("/api/chat", async (req, res) => {
   if (!checkAuth(req, res)) return;
 
-  const { messages = [], model: reqModel, conversation_id } = req.body;
+  const { messages = [], model: reqModel, conversation_id, channel, channel_meta } = req.body;
   if (!messages.length) return res.status(400).json({ error: "messages required" });
 
   // Determine conversation ID: explicit param > header > "default"
   const convId = conversation_id
     || req.headers["x-conversation-id"]
     || "default";
+
+  // Channel context — tells the system prompt WHERE the user is talking from
+  const channelName = channel || req.headers["x-channel"] || "web";
+  const channelOpts = {
+    channel: channelName,
+    ...(channel_meta || {}),
+  };
 
   // Get the latest user message from the request
   const latestUserMsg = messages[messages.length - 1];
@@ -174,7 +181,7 @@ app.post("/api/chat", async (req, res) => {
     // Build conversation from shared memory (not from request body)
     const conv = getConversation(convId);
     const conversation = [
-      { role: "system", content: SYSTEM_PROMPT(tools) },
+      { role: "system", content: SYSTEM_PROMPT(tools, channelOpts) },
       ...conv.messages,
     ];
 
