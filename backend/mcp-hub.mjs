@@ -1,7 +1,6 @@
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
-const TOOL_CALL_TIMEOUT_MS = 120_000; // 120s per tool call (Composio needs longer)
 const HEALTH_CHECK_INTERVAL_MS = 5 * 60_000; // check every 5 min
 const CONNECT_TIMEOUT_MS = 15_000; // 15s to connect to MCP server
 
@@ -173,13 +172,8 @@ export class McpHub {
     }
 
     try {
-      // Timeout wrapper — prevent hanging on unresponsive MCP servers
-      const result = await Promise.race([
-        entry.client.callTool({ name: toolName, arguments: args }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`Tool call timeout (${TOOL_CALL_TIMEOUT_MS / 1000}s)`)), TOOL_CALL_TIMEOUT_MS)
-        ),
-      ]);
+      // No timeout — let tool calls run until they complete naturally
+      const result = await entry.client.callTool({ name: toolName, arguments: args });
       return result;
     } catch (err) {
       const msg = err.message || "";
@@ -190,12 +184,7 @@ export class McpHub {
           await this.reconnect(serverName);
           console.log(`✓ Reconnected ${serverName}, retrying tool call`);
           const retryEntry = this.#servers.get(serverName);
-          const result = await Promise.race([
-            retryEntry.client.callTool({ name: toolName, arguments: args }),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error(`Tool call timeout after reconnect (${TOOL_CALL_TIMEOUT_MS / 1000}s)`)), TOOL_CALL_TIMEOUT_MS)
-            ),
-          ]);
+          const result = await retryEntry.client.callTool({ name: toolName, arguments: args });
           return result;
         } catch (reconnectErr) {
           console.error(`Reconnect+retry failed for ${qualifiedName}:`, reconnectErr.message);

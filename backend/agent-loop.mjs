@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 
-const MAX_TOOL_ROUNDS = 25; // allow long multi-tool sequences (e.g. "test all tools")
+const MAX_TOOL_ROUNDS = 100; // no practical cap — let the agent run as many rounds as needed
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 
 /**

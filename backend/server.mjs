@@ -16,7 +16,6 @@ const MODEL = process.env.MODEL || "qwen/qwen3.5-plus-02-15";
 const BEARER_TOKEN = process.env.BEARER_TOKEN || "jada-chat-2026";
 const MAX_HISTORY = 50; // max messages per conversation (keeps context window manageable)
 const CONVERSATION_TTL_MS = 24 * 60 * 60 * 1000; // 24h TTL
-const REQUEST_TIMEOUT_MS = 10 * 60_000; // 10 min max per chat request (long tool chains need time)
 const SSE_KEEPALIVE_MS = 15_000; // ping every 15s to prevent proxy timeout
 
 if (!OPENROUTER_KEY) {
@@ -210,20 +209,9 @@ app.post("/api/chat", async (req, res) => {
     if (!res.writableEnded) res.write(": keepalive\n\n");
   }, SSE_KEEPALIVE_MS);
 
-  // Hard timeout — prevent zombie connections
-  const requestTimer = setTimeout(() => {
-    if (!res.writableEnded) {
-      console.warn(`[timeout] Chat request exceeded ${REQUEST_TIMEOUT_MS / 1000}s, aborting`);
-      res.write(`event: step_delta\ndata: ${JSON.stringify({ text: `\n\n[Request timed out after ${REQUEST_TIMEOUT_MS / 60_000} minutes]` })}\n\n`);
-      res.write(`event: step_complete\ndata: ${JSON.stringify({ text: fullText + `\n\n[Request timed out after ${REQUEST_TIMEOUT_MS / 60_000} minutes]` })}\n\n`);
-      res.end();
-    }
-  }, REQUEST_TIMEOUT_MS);
-
   // Cleanup on client disconnect
   res.on("close", () => {
     clearInterval(keepalive);
-    clearTimeout(requestTimer);
   });
 
   let fullText = "";
@@ -275,12 +263,10 @@ app.post("/api/chat", async (req, res) => {
 
     // Persona step_complete event
     clearInterval(keepalive);
-    clearTimeout(requestTimer);
     res.write(`event: step_complete\ndata: ${JSON.stringify({ text: fullText, conversation_id: convId })}\n\n`);
     res.end();
   } catch (err) {
     clearInterval(keepalive);
-    clearTimeout(requestTimer);
     console.error("Agent loop error:", err);
     if (!res.headersSent) {
       res.status(500).json({ error: err.message });
@@ -316,7 +302,7 @@ async function start() {
     console.log(`Jada Agent Backend listening on :${PORT}`);
     console.log(`Model: ${MODEL}`);
     console.log(`Shared memory: enabled (${MAX_HISTORY} msg/conv, ${CONVERSATION_TTL_MS / 3600000}h TTL)`);
-    console.log(`Timeouts: request=${REQUEST_TIMEOUT_MS / 1000}s, keepalive=${SSE_KEEPALIVE_MS / 1000}s`);
+    console.log(`Timeouts: none (no cap), keepalive=${SSE_KEEPALIVE_MS / 1000}s`);
   });
 
   // Graceful shutdown
