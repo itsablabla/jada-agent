@@ -125,7 +125,7 @@ bot.on("message", async (msg) => {
           if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
-              if (data.text) fullText = data.text; // step_complete has full text
+              if (data.text) fullText += data.text; // accumulate; step_complete also sends full text but may not arrive
             } catch {
               // skip malformed JSON
             }
