@@ -38,7 +38,14 @@ class AgentController extends Controller {
         // Check both conversation_id (new) and session_id (legacy) params
         $sessionId = $this->request->getParam('conversation_id')
             ?? $this->request->getParam('session_id', 'main');
-        return $uid . ':' . $sessionId;
+        // Prevent double-prefixing: if the conversation_id already starts with
+        // "uid:" (e.g. "admin:conv-123"), return it as-is instead of adding
+        // another prefix which would create "admin:admin:conv-123".
+        $prefix = $uid . ':';
+        if (str_starts_with($sessionId, $prefix)) {
+            return $sessionId;
+        }
+        return $prefix . $sessionId;
     }
 
     /**
