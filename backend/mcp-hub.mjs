@@ -11,6 +11,8 @@ const CONNECT_TIMEOUT_MS = 15_000; // 15s to connect to MCP server
 export class McpHub {
   /** @type {Map<string, {client: Client, transport: StreamableHTTPClientTransport, tools: any[], status: string}>} */
   #servers = new Map();
+  /** Per-server reconnect lock — prevents concurrent reconnects */
+  #reconnecting = new Map();
 
   /** MCP server configs — add new servers here */
   #configs = [
@@ -58,7 +60,7 @@ export class McpHub {
   startHealthWatchdog() {
     this.#watchdogTimer = setInterval(async () => {
       for (const [name, entry] of this.#servers) {
-        if (entry.status !== "connected") {
+        if (entry.status !== "connected" && !this.#reconnecting.has(name)) {
           console.log(`[watchdog] ${name} is ${entry.status}, attempting reconnect...`);
           try {
             await this.reconnect(name);
@@ -79,8 +81,16 @@ export class McpHub {
   #watchdogTimer = null;
 
   async #connect(config) {
-    const entry = { client: null, transport: null, tools: [], status: "connecting" };
-    this.#servers.set(config.name, entry);
+    // Reuse existing entry if present (avoids replacing with client=null during reconnect)
+    let entry = this.#servers.get(config.name);
+    const oldClient = entry?.client;
+
+    if (!entry) {
+      entry = { client: null, transport: null, tools: [], status: "connecting" };
+      this.#servers.set(config.name, entry);
+    } else {
+      entry.status = "connecting";
+    }
 
     try {
       const transport = new StreamableHTTPClientTransport(
@@ -114,14 +124,24 @@ export class McpHub {
       ]);
       const tools = toolsResult.tools || [];
 
+      // Only update entry AFTER everything succeeds (atomic swap)
       entry.client = client;
       entry.transport = transport;
       entry.tools = tools;
       entry.status = "connected";
 
+      // Close old client if we were reconnecting
+      if (oldClient) {
+        try { oldClient.close?.(); } catch { /* ignore */ }
+      }
+
       console.log(`✓ ${config.name}: ${tools.length} tools discovered`);
       return entry;
     } catch (err) {
+      // On failure during reconnect, keep old client if it existed
+      if (oldClient && entry.client === null) {
+        entry.client = oldClient;
+      }
       entry.status = `error: ${err.message}`;
       console.warn(`✗ ${config.name}: ${err.message}`);
       throw err;
@@ -156,6 +176,7 @@ export class McpHub {
 
   /**
    * Execute a tool call. The qualified name is "serverName__toolName".
+   * No timeout — tool calls run until they complete naturally.
    */
   async callTool(qualifiedName, args) {
     const sepIdx = qualifiedName.indexOf("__");
@@ -167,7 +188,7 @@ export class McpHub {
     const toolName = qualifiedName.slice(sepIdx + 2);
 
     const entry = this.#servers.get(serverName);
-    if (!entry || entry.status !== "connected") {
+    if (!entry || !entry.client) {
       return { content: [{ type: "text", text: `Server ${serverName} not connected` }], isError: true };
     }
 
@@ -183,9 +204,12 @@ export class McpHub {
         try {
           await this.reconnect(serverName);
           console.log(`✓ Reconnected ${serverName}, retrying tool call`);
-          const retryEntry = this.#servers.get(serverName);
-          const result = await retryEntry.client.callTool({ name: toolName, arguments: args });
-          return result;
+          // After reconnect, entry object is the SAME (we reuse it), so entry.client is updated
+          if (entry.client) {
+            const result = await entry.client.callTool({ name: toolName, arguments: args });
+            return result;
+          }
+          return { content: [{ type: "text", text: `Tool error: reconnect succeeded but client unavailable` }], isError: true };
         } catch (reconnectErr) {
           console.error(`Reconnect+retry failed for ${qualifiedName}:`, reconnectErr.message);
           return { content: [{ type: "text", text: `Tool error: reconnect failed — ${reconnectErr.message}` }], isError: true };
@@ -204,10 +228,20 @@ export class McpHub {
     return status;
   }
 
-  /** Reconnect a specific server */
+  /** Reconnect a specific server — with lock to prevent concurrent reconnects */
   async reconnect(serverName) {
+    // If already reconnecting, wait for that to finish instead of starting another
+    if (this.#reconnecting.has(serverName)) {
+      return this.#reconnecting.get(serverName);
+    }
+
     const config = this.#configs.find((c) => c.name === serverName);
     if (!config) throw new Error(`Unknown server: ${serverName}`);
-    return this.#connect(config);
+
+    const promise = this.#connect(config).finally(() => {
+      this.#reconnecting.delete(serverName);
+    });
+    this.#reconnecting.set(serverName, promise);
+    return promise;
   }
 }
