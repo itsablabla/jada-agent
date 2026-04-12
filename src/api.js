@@ -55,6 +55,16 @@ export default {
 		return res.data
 	},
 
+	async getConversationToolCalls(id) {
+		const res = await axios.get(`${baseUrl}/api/conversations/${encodeURIComponent(id)}/toolcalls`)
+		return res.data
+	},
+
+	async getRecentToolCalls() {
+		const res = await axios.get(`${baseUrl}/api/toolcalls/recent`)
+		return res.data
+	},
+
 	async deleteConversation(id) {
 		const res = await axios.delete(`${baseUrl}/api/conversations/${encodeURIComponent(id)}`)
 		return res.data

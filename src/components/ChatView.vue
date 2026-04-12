@@ -157,6 +157,15 @@ export default {
 				if (data?.messages) {
 					this.messages = data.messages
 				}
+				// Load persisted tool calls for this conversation into the right panel
+				if (data?.toolCalls && Array.isArray(data.toolCalls) && data.toolCalls.length) {
+					store.recentToolCalls = data.toolCalls.map(tc => ({
+						name: tc.name,
+						status: tc.status || 'success',
+						result: tc.result || null,
+						timestamp: tc.timestamp ? new Date(tc.timestamp) : new Date(),
+					}))
+				}
 			} catch {
 				// New conversation, no messages yet
 			}
@@ -242,10 +251,14 @@ export default {
 								}
 								this.streamingToolCalls = [...toolCalls]
 							} else if (evtType === 'tool_result') {
-								const last = toolCalls[toolCalls.length - 1]
-								if (last) {
-									last.status = 'success'
-									last.result = parsed.result || parsed.output || null
+								// Match by tool name (find the last running one with that name)
+								const toolName = parsed.tool || parsed.name
+								const match = toolName
+									? [...toolCalls].reverse().find(t => t.name === toolName && t.status === 'running')
+									: toolCalls[toolCalls.length - 1]
+								if (match) {
+									match.status = parsed.status === 'error' ? 'error' : 'success'
+									match.result = parsed.result || parsed.output || null
 								}
 								this.streamingToolCalls = [...toolCalls]
 							} else if (evtType === 'reason_delta') {
@@ -293,8 +306,9 @@ export default {
 				this.streamingToolCalls = []
 				this.currentCancel = null
 				this.scrollToBottom()
-				// Refresh conversation list in sidebar so new/updated conversations appear
+				// Refresh conversation list + tool calls in sidebar
 				actions.loadConversations()
+				actions.loadRecentToolCalls()
 			}
 		},
 

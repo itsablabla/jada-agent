@@ -144,6 +144,9 @@ export const actions = {
 		// Load conversations for active workspace
 		await this.loadConversations()
 
+		// Load recent tool calls from backend (persisted across reloads)
+		await this.loadRecentToolCalls()
+
 		// Load user profile
 		try {
 			store.userProfile = await api.getUserProfile()
@@ -224,6 +227,23 @@ export const actions = {
 		store.recentToolCalls.unshift(toolCall)
 		if (store.recentToolCalls.length > 20) {
 			store.recentToolCalls.pop()
+		}
+	},
+
+	async loadRecentToolCalls() {
+		try {
+			const data = await api.getRecentToolCalls()
+			if (data?.toolCalls && Array.isArray(data.toolCalls)) {
+				store.recentToolCalls = data.toolCalls.map(tc => ({
+					name: tc.name,
+					status: tc.status || 'success',
+					result: tc.result || null,
+					timestamp: tc.timestamp ? new Date(tc.timestamp) : new Date(),
+					conversationId: tc.conversationId,
+				}))
+			}
+		} catch {
+			// Backend may not support this yet — keep empty
 		}
 	},
 }

@@ -17,8 +17,8 @@
 			<div v-if="!store.mcpServers.length" class="jada-rp-empty">No servers connected</div>
 
 			<h4>Recent Tool Calls</h4>
-			<div v-for="tc in store.recentToolCalls.slice(0, 8)" :key="tc.name + tc.timestamp" class="jada-rp-tool-call">
-				<span class="jada-rp-tc-icon">&#9989;</span>
+			<div v-for="tc in store.recentToolCalls.slice(0, 12)" :key="tc.name + tc.timestamp" class="jada-rp-tool-call">
+				<span :class="['jada-rp-tc-icon', tc.status || 'success']">{{ statusIcon(tc.status) }}</span>
 				<div class="jada-rp-tc-info">
 					<div class="jada-rp-tc-name">{{ tc.name }}</div>
 					<div class="jada-rp-tc-time">{{ formatTime(tc.timestamp) }}</div>
@@ -71,6 +71,11 @@ export default {
 		formatTime(date) {
 			if (!date) return ''
 			return new Date(date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+		},
+		statusIcon(status) {
+			if (status === 'running') return '⏳'
+			if (status === 'error') return '❌'
+			return '✅'
 		},
 	},
 }
@@ -161,6 +166,9 @@ export default {
 }
 
 .jada-rp-tc-icon { font-size: 12px; }
+.jada-rp-tc-icon.running { animation: pulse 1s infinite; }
+.jada-rp-tc-icon.error { opacity: 0.7; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 .jada-rp-tc-name {
 	font-size: 12px;
