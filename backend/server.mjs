@@ -16,7 +16,7 @@ const MODEL = process.env.MODEL || "qwen/qwen3.5-plus-02-15";
 const BEARER_TOKEN = process.env.BEARER_TOKEN || "jada-chat-2026";
 const MAX_HISTORY = 50; // max messages per conversation (keeps context window manageable)
 const CONVERSATION_TTL_MS = 24 * 60 * 60 * 1000; // 24h TTL
-const REQUEST_TIMEOUT_MS = 120_000; // 2 min max per chat request
+const REQUEST_TIMEOUT_MS = 10 * 60_000; // 10 min max per chat request (long tool chains need time)
 const SSE_KEEPALIVE_MS = 15_000; // ping every 15s to prevent proxy timeout
 
 if (!OPENROUTER_KEY) {
@@ -214,8 +214,8 @@ app.post("/api/chat", async (req, res) => {
   const requestTimer = setTimeout(() => {
     if (!res.writableEnded) {
       console.warn(`[timeout] Chat request exceeded ${REQUEST_TIMEOUT_MS / 1000}s, aborting`);
-      res.write(`event: step_delta\ndata: ${JSON.stringify({ text: "\n\n[Request timed out after 2 minutes]" })}\n\n`);
-      res.write(`event: step_complete\ndata: ${JSON.stringify({ text: fullText + "\n\n[Request timed out]" })}\n\n`);
+      res.write(`event: step_delta\ndata: ${JSON.stringify({ text: `\n\n[Request timed out after ${REQUEST_TIMEOUT_MS / 60_000} minutes]` })}\n\n`);
+      res.write(`event: step_complete\ndata: ${JSON.stringify({ text: fullText + `\n\n[Request timed out after ${REQUEST_TIMEOUT_MS / 60_000} minutes]` })}\n\n`);
       res.end();
     }
   }, REQUEST_TIMEOUT_MS);

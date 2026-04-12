@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 
-const MAX_TOOL_ROUNDS = 10; // prevent infinite loops
+const MAX_TOOL_ROUNDS = 25; // allow long multi-tool sequences (e.g. "test all tools")
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 
 /**
@@ -42,10 +42,9 @@ export async function agentLoop({
       // Prioritize tools by server importance:
       // 1. Nextcloud (primary mission — full Nextcloud control)
       // 2. Composio (app integrations — meta-tools)
-      // 3. Rube (automation recipes)
-      // 4. Kuse (platform tools — fill remaining slots)
+      // 3. proton-unified (mail, drive, iCloud, beeper, fabric)
       const TOOL_CAP = 200;
-      const priority = ["nextcloud", "composio", "rube"];
+      const priority = ["nextcloud", "composio", "proton-unified"];
       const prioritized = [];
       const rest = [];
       for (const t of tools) {
