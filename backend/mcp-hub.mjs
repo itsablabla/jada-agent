@@ -24,26 +24,12 @@ export class McpHub {
       enabled: !!process.env.COMPOSIO_MCP_API_KEY,
     },
     {
-      name: "kuse",
-      url: "https://kuse-mcp-server.fly.dev/mcp",
-      headers: {},
+      name: "proton-unified",
+      url: process.env.PROTON_UNIFIED_MCP_URL || "https://mcp.garzaos.cloud/mcp",
+      headers: {
+        Authorization: `Bearer ${process.env.PROTON_UNIFIED_MCP_TOKEN || "garza-proton-unified-mcp-2026-Qm8kR4xN7vL2pW9tJ3yB"}`,
+      },
       enabled: true,
-    },
-    {
-      name: "vault",
-      url: process.env.VAULT_MCP_URL || "http://72.62.86.63:8333/mcp",
-      headers: {
-        Authorization: `Bearer ${process.env.VAULT_MCP_BEARER_TOKEN || ""}`,
-      },
-      enabled: !!process.env.VAULT_MCP_BEARER_TOKEN,
-    },
-    {
-      name: "protonmail",
-      url: process.env.PROTONMAIL_MCP_URL || "https://protonmail.garzaos.online/mcp",
-      headers: {
-        Authorization: `Bearer ${process.env.PROTONMAIL_MCP_TOKEN || ""}`,
-      },
-      enabled: !!process.env.PROTONMAIL_MCP_TOKEN,
     },
     {
       name: "nextcloud",
@@ -52,14 +38,6 @@ export class McpHub {
         ? { Authorization: `Bearer ${process.env.NEXTCLOUD_MCP_TOKEN}` }
         : {},
       enabled: true,
-    },
-    {
-      name: "rube",
-      url: "https://rube.app/mcp",
-      headers: {
-        Authorization: `Bearer ${process.env.RUBE_MCP_TOKEN || ""}`,
-      },
-      enabled: !!process.env.RUBE_MCP_TOKEN,
     },
   ];
 
