@@ -125,7 +125,9 @@ bot.on("message", async (msg) => {
           if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
-              if (data.text) fullText += data.text; // accumulate; step_complete also sends full text but may not arrive
+              // Only accumulate from step_delta; step_complete contains the full text
+              // which would duplicate everything. step_complete includes conversation_id.
+              if (data.text && !data.conversation_id) fullText += data.text;
             } catch {
               // skip malformed JSON
             }
