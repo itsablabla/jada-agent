@@ -27,7 +27,7 @@ export class McpHub {
     },
     {
       name: "vault",
-      url: "https://vault.garzaos.cloud/mcp",
+      url: process.env.VAULT_MCP_URL || "http://72.62.86.63:8333/mcp",
       headers: {
         Authorization: `Bearer ${process.env.VAULT_MCP_BEARER_TOKEN || ""}`,
       },
@@ -35,7 +35,7 @@ export class McpHub {
     },
     {
       name: "protonmail",
-      url: "https://protonmail.garzaos.online/mcp",
+      url: process.env.PROTONMAIL_MCP_URL || "https://protonmail.garzaos.online/mcp",
       headers: {
         Authorization: `Bearer ${process.env.PROTONMAIL_MCP_TOKEN || ""}`,
       },
