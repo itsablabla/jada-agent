@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+    <id>jadaagent</id>
+    <name>Jada Agent</name>
+    <namespace>JadaAgent</namespace>
+    <summary>AI Agent powered by OpenClaw — autonomous tasks, skills, and MCP tools</summary>
+    <description><![CDATA[
+**Jada Agent** brings autonomous AI agent capabilities to your Nextcloud, powered by [OpenClaw](https://openclaw.ai).
+
+### Features
+
+- **Dashboard** — Real-time agent health, activity feed, and quick actions
+- **Chat** — Converse with your AI agent directly from Nextcloud
+- **Skills** — Manage installed skills and MCP server connections
+- **Schedules** — Create recurring or one-time automated jobs
+- **Settings** — Configure OpenClaw connection, model selection, and identity
+
+### Requirements
+
+- OpenClaw instance (self-hosted Docker container)
+- API key for your LLM provider (OpenRouter, Anthropic, OpenAI, etc.)
+    ]]></description>
+    <version>0.2.3</version>
+    <licence>AGPL-3.0-or-later</licence>
+    <author mail="garzasecure@pm.me">Garza OS</author>
+    <category>integration</category>
+    <category>tools</category>
+    <category>ai</category>
+    <website>https://github.com/itsablabla/jada-agent</website>
+    <bugs>https://github.com/itsablabla/jada-agent/issues</bugs>
+    <dependencies>
+        <php min-version="8.1"/>
+        <nextcloud min-version="28" max-version="33"/>
+    </dependencies>
+    <settings>
+        <admin>OCA\JadaAgent\Settings\AdminSettings</admin>
+        <admin-section>OCA\JadaAgent\Settings\AdminSection</admin-section>
+    </settings>
+    <navigations>
+        <navigation>
+            <id>jadaagent</id>
+            <name>Jada Agent</name>
+            <route>jadaagent.page.index</route>
+            <icon>app.svg</icon>
+            <type>link</type>
+        </navigation>
+    </navigations>
+</info>

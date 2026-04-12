@@ -1,0 +1,15 @@
+{
+  "name": "jada-telegram-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "telegram-bot.mjs",
+  "scripts": {
+    "start": "node telegram-bot.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}

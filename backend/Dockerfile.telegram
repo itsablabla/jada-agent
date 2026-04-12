@@ -1,0 +1,6 @@
+FROM node:20-slim
+WORKDIR /app
+COPY telegram-bot-package.json ./package.json
+RUN npm install --production
+COPY telegram-bot.mjs ./
+CMD ["node", "telegram-bot.mjs"]
