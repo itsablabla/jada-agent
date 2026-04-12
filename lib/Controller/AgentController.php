@@ -94,19 +94,21 @@ class AgentController extends Controller {
             ];
         }
 
-        // OpenClaw uses OpenAI-compatible /v1/chat/completions
-        $result = $this->openClaw->post('/v1/chat/completions', [
-            'model' => 'openclaw:main',
+        // Backend uses /api/chat with SSE streaming; for non-SSE we still
+        // call the same endpoint but return whatever we get as JSON.
+        $result = $this->openClaw->post('/api/chat', [
             'messages' => $chatMessages,
-            'user' => $scopedId,
+            'conversation_id' => $scopedId,
         ]);
 
-        // Extract the assistant response from OpenAI format
+        // Extract the assistant response
         $response = '';
         if (isset($result['choices'][0]['message']['content'])) {
             $response = $result['choices'][0]['message']['content'];
         } elseif (isset($result['error'])) {
             $response = 'Error: ' . ($result['error']['message'] ?? json_encode($result['error']));
+        } elseif (isset($result['raw'])) {
+            $response = $result['raw'];
         }
 
         return new JSONResponse([
@@ -130,11 +132,9 @@ class AgentController extends Controller {
             ? $this->sanitizeMessages($messages)
             : [['role' => 'user', 'content' => $message]];
 
-        $result = $this->openClaw->postStream('/v1/chat/completions', [
-            'model' => 'openclaw:main',
-            'stream' => true,
+        $result = $this->openClaw->postStream('/api/chat', [
             'messages' => $chatMessages,
-            'user' => $scopedId,
+            'conversation_id' => $scopedId,
         ]);
 
         return new DataResponse(['response' => $result]);
@@ -169,14 +169,12 @@ class AgentController extends Controller {
         header('Connection: keep-alive');
         header('X-Accel-Buffering: no');
 
-        $url = $this->openClaw->getBaseUrl() . '/v1/chat/completions';
+        $url = $this->openClaw->getBaseUrl() . '/api/chat';
         $token = $this->openClaw->getApiToken();
 
         $payload = json_encode([
-            'model' => 'openclaw:main',
-            'stream' => true,
             'messages' => $chatMessages,
-            'user' => $scopedId,
+            'conversation_id' => $scopedId,
         ]);
 
         $ch = curl_init();

@@ -204,30 +204,52 @@ export default {
 					const lines = buffer.split('\n')
 					buffer = lines.pop() || ''
 
+					let currentEvent = ''
 					for (const line of lines) {
+						// Track the SSE event type (e.g. "event: step_delta")
+						if (line.startsWith('event: ')) {
+							currentEvent = line.slice(7).trim()
+							continue
+						}
 						if (!line.startsWith('data: ')) continue
 						const data = line.slice(6).trim()
 						if (data === '[DONE]') continue
 
 						try {
 							const parsed = JSON.parse(data)
+							// Use event type from "event:" line, fall back to parsed.type
+							const evtType = currentEvent || parsed.type || ''
 
-							// Handle Persona SSE format
-							if (parsed.type === 'text_delta' || parsed.type === 'content_delta') {
+							if (evtType === 'step_delta' || evtType === 'text_delta' || evtType === 'content_delta') {
+								// Actual assistant response text
 								fullText += parsed.delta || parsed.text || ''
 								this.streamingText = fullText
-							} else if (parsed.type === 'step_delta' || parsed.type === 'tool_start') {
+							} else if (evtType === 'tool_start' || evtType === 'tool_call') {
 								const name = parsed.tool || parsed.name || 'tool'
 								toolCalls.push({ name, status: 'running', result: null })
 								this.streamingToolCalls = [...toolCalls]
 								actions.addToolCall({ name, timestamp: new Date() })
-							} else if (parsed.type === 'step_complete' || parsed.type === 'tool_result') {
+							} else if (evtType === 'step_complete') {
+								// Final complete message — use as authoritative text
+								if (parsed.text && !fullText) {
+									fullText = parsed.text
+									this.streamingText = fullText
+								}
+								const last = toolCalls[toolCalls.length - 1]
+								if (last && last.status === 'running') {
+									last.status = 'success'
+									last.result = parsed.result || parsed.output || null
+								}
+								this.streamingToolCalls = [...toolCalls]
+							} else if (evtType === 'tool_result') {
 								const last = toolCalls[toolCalls.length - 1]
 								if (last) {
 									last.status = 'success'
 									last.result = parsed.result || parsed.output || null
 								}
 								this.streamingToolCalls = [...toolCalls]
+							} else if (evtType === 'reason_delta') {
+								// Reasoning/thinking — skip (not shown to user)
 							} else if (parsed.choices?.[0]?.delta?.content) {
 								// OpenAI format fallback
 								fullText += parsed.choices[0].delta.content
@@ -236,6 +258,7 @@ export default {
 						} catch {
 							// Ignore unparseable lines
 						}
+						currentEvent = ''
 					}
 					this.scrollToBottom()
 				}

@@ -160,17 +160,21 @@ export const actions = {
 	async refreshHealth() {
 		try {
 			const data = await api.getHealth()
-			store.healthy = data?.ok === true
+			store.healthy = data?.ok === true || data?.status === 'ok'
 			store.healthData = data
 
 			// Extract MCP server info
-			if (data?.servers) {
-				store.mcpServers = Object.entries(data.servers).map(([name, info]) => ({
+			// Backend returns mcpServers (or servers) with {status, tools} per server
+			const servers = data?.mcpServers || data?.servers
+			if (servers && typeof servers === 'object') {
+				store.mcpServers = Object.entries(servers).map(([name, info]) => ({
 					name,
 					tools: info.tools || 0,
-					connected: info.connected !== false,
+					connected: info.status === 'connected' || info.connected !== false,
 				}))
 				store.totalTools = store.mcpServers.reduce((sum, s) => sum + s.tools, 0)
+			} else if (data?.tools) {
+				store.totalTools = data.tools
 			} else if (data?.tool_count) {
 				store.totalTools = data.tool_count
 			}
