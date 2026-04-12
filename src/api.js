@@ -70,6 +70,11 @@ export default {
 		return res.data
 	},
 
+	async reconnectMcp(server = null) {
+		const res = await axios.post(`${baseUrl}/api/reconnect`, server ? { server } : {})
+		return res.data
+	},
+
 	// Workspace API
 	async getWorkspaces() {
 		const res = await axios.get(`${baseUrl}/api/workspaces`)

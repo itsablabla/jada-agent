@@ -18,6 +18,24 @@ const MAX_HISTORY = 50; // max messages per conversation (keeps context window m
 const CONVERSATION_TTL_MS = 24 * 60 * 60 * 1000; // 24h TTL
 const SSE_KEEPALIVE_MS = 15_000; // ping every 15s to prevent proxy timeout
 
+// ── User identity extraction ───────────────────────────────────────
+// Hermes is the authoritative owner of user scoping. The Nextcloud PHP
+// proxy passes identity via X-Nextcloud-User / X-Nextcloud-Name headers.
+// Hermes uses this to prefix conversation IDs and filter results.
+function getUserFromRequest(req) {
+  const uid = req.headers["x-nextcloud-user"] || "anonymous";
+  const displayName = req.headers["x-nextcloud-name"] || uid;
+  return { uid, displayName };
+}
+
+// Scope a conversation ID to a user — Hermes owns this logic exclusively.
+// If the ID already has the user prefix, return as-is (idempotent).
+function scopeConversationId(uid, rawId) {
+  const prefix = uid + ":";
+  if (rawId.startsWith(prefix)) return rawId;
+  return prefix + rawId;
+}
+
 if (!OPENROUTER_KEY) {
   console.error("OPENROUTER_API_KEY is required");
   process.exit(1);
@@ -144,7 +162,9 @@ app.get("/tools", (req, res) => {
 // ── Conversation history endpoint ──────────────────────────────────
 app.get("/api/conversations/:id", (req, res) => {
   if (!checkAuth(req, res)) return;
-  const conv = conversations.get(req.params.id);
+  const user = getUserFromRequest(req);
+  const scopedId = scopeConversationId(user.uid, req.params.id);
+  const conv = conversations.get(scopedId);
   if (!conv) return res.json({ messages: [], toolCalls: [] });
   res.json({ messages: conv.messages, toolCalls: conv.toolCalls || [], updatedAt: conv.updatedAt });
 });
@@ -152,7 +172,9 @@ app.get("/api/conversations/:id", (req, res) => {
 // ── Tool calls for a conversation ─────────────────────────────────
 app.get("/api/conversations/:id/toolcalls", (req, res) => {
   if (!checkAuth(req, res)) return;
-  const conv = conversations.get(req.params.id);
+  const user = getUserFromRequest(req);
+  const scopedId = scopeConversationId(user.uid, req.params.id);
+  const conv = conversations.get(scopedId);
   if (!conv) return res.json({ toolCalls: [] });
   res.json({ toolCalls: conv.toolCalls || [] });
 });
@@ -160,11 +182,12 @@ app.get("/api/conversations/:id/toolcalls", (req, res) => {
 // ── Recent tool calls across all conversations ────────────────────
 app.get("/api/toolcalls/recent", (req, res) => {
   if (!checkAuth(req, res)) return;
-  const prefix = req.query.prefix || '';
+  const user = getUserFromRequest(req);
+  const prefix = user.uid + ":";
   const limit = parseInt(req.query.limit || '20', 10);
   const all = [];
   for (const [id, conv] of conversations) {
-    if (prefix && !id.startsWith(prefix)) continue;
+    if (!id.startsWith(prefix)) continue;
     for (const tc of (conv.toolCalls || [])) {
       all.push({ ...tc, conversationId: id });
     }
@@ -176,11 +199,12 @@ app.get("/api/toolcalls/recent", (req, res) => {
 // ── List conversations ─────────────────────────────────────────────
 app.get("/api/conversations", (req, res) => {
   if (!checkAuth(req, res)) return;
-  const prefix = req.query.prefix || req.query.user || '';
+  const user = getUserFromRequest(req);
+  const prefix = user.uid + ":";
   const list = [];
   for (const [id, conv] of conversations) {
-    // Filter by prefix if provided (for user-scoped queries)
-    if (prefix && !id.startsWith(prefix)) continue;
+    // Auto-filter by user — Hermes owns this scoping
+    if (!id.startsWith(prefix)) continue;
     list.push({
       id,
       title: conv.title || id,
@@ -193,6 +217,20 @@ app.get("/api/conversations", (req, res) => {
   // Sort by most recent first
   list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   res.json({ conversations: list });
+});
+
+// ── Delete conversation ──────────────────────────────────────────────
+app.delete("/api/conversations/:id", (req, res) => {
+  if (!checkAuth(req, res)) return;
+  const user = getUserFromRequest(req);
+  const scopedId = scopeConversationId(user.uid, req.params.id);
+  if (conversations.has(scopedId)) {
+    conversations.delete(scopedId);
+    schedulePersist();
+    res.json({ deleted: true });
+  } else {
+    res.status(404).json({ error: "Conversation not found" });
+  }
 });
 
 // ── Reconnect MCP servers ────────────────────────────────────────────
@@ -220,10 +258,15 @@ app.post("/api/chat", async (req, res) => {
   const { messages = [], model: reqModel, conversation_id, channel, channel_meta } = req.body;
   if (!messages.length) return res.status(400).json({ error: "messages required" });
 
+  // User identity — Hermes owns scoping, PHP just passes the headers
+  const user = getUserFromRequest(req);
+
   // Determine conversation ID: explicit param > header > "default"
-  const convId = conversation_id
+  // Hermes handles the user prefix — PHP does NOT touch this anymore
+  const rawConvId = conversation_id
     || req.headers["x-conversation-id"]
     || "default";
+  const convId = scopeConversationId(user.uid, rawConvId);
 
   // Channel context — tells the system prompt WHERE the user is talking from
   const channelName = channel || req.headers["x-channel"] || "web";
