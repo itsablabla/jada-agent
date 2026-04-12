@@ -35,7 +35,9 @@ class AgentController extends Controller {
     private function getScopedSessionId(): string {
         $user = $this->userSession->getUser();
         $uid = $user ? $user->getUID() : 'anonymous';
-        $sessionId = $this->request->getParam('session_id', 'main');
+        // Check both conversation_id (new) and session_id (legacy) params
+        $sessionId = $this->request->getParam('conversation_id')
+            ?? $this->request->getParam('session_id', 'main');
         return $uid . ':' . $sessionId;
     }
 
@@ -214,24 +216,24 @@ class AgentController extends Controller {
      * @NoAdminRequired
      */
     public function getConversations(): JSONResponse {
-        $scopedId = $this->getScopedSessionId();
-        return new JSONResponse($this->openClaw->get('/api/v1/conversations?user=' . urlencode($scopedId)));
+        $user = $this->userSession->getUser();
+        $uid = $user ? $user->getUID() : 'anonymous';
+        // Use prefix filter to get all conversations for this user
+        return new JSONResponse($this->openClaw->get('/api/conversations?prefix=' . urlencode($uid . ':')));
     }
 
     /**
      * @NoAdminRequired
      */
     public function getConversation(string $id): JSONResponse {
-        $scopedId = $this->getScopedSessionId();
-        return new JSONResponse($this->openClaw->get('/api/v1/conversations/' . urlencode($id) . '?user=' . urlencode($scopedId)));
+        return new JSONResponse($this->openClaw->get('/api/conversations/' . urlencode($id)));
     }
 
     /**
      * @NoAdminRequired
      */
     public function deleteConversation(string $id): JSONResponse {
-        $scopedId = $this->getScopedSessionId();
-        return new JSONResponse($this->openClaw->delete('/api/v1/conversations/' . urlencode($id) . '?user=' . urlencode($scopedId)));
+        return new JSONResponse($this->openClaw->delete('/api/conversations/' . urlencode($id)));
     }
 
     /**

@@ -1,5 +1,7 @@
 import express from "express";
 import cors from "cors";
+import fs from "fs";
+import path from "path";
 import { McpHub } from "./mcp-hub.mjs";
 import { agentLoop } from "./agent-loop.mjs";
 import { SYSTEM_PROMPT } from "./system-prompt.mjs";
@@ -29,24 +31,69 @@ const mcpHub = new McpHub();
 // In-memory store keyed by conversationId. Both widget and Telegram
 // share the same conversationId to see each other's messages.
 const conversations = new Map();
+const CONVERSATIONS_FILE = process.env.CONVERSATIONS_FILE || '/data/conversations.json';
+
+// Load persisted conversations on startup
+try {
+  if (fs.existsSync(CONVERSATIONS_FILE)) {
+    const raw = fs.readFileSync(CONVERSATIONS_FILE, 'utf8');
+    const saved = JSON.parse(raw);
+    for (const [id, conv] of Object.entries(saved)) {
+      conversations.set(id, conv);
+    }
+    console.log(`Loaded ${conversations.size} conversations from disk`);
+  }
+} catch (err) {
+  console.warn('Could not load conversations from disk:', err.message);
+}
+
+function persistConversations() {
+  try {
+    const dir = path.dirname(CONVERSATIONS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const obj = Object.fromEntries(conversations);
+    fs.writeFileSync(CONVERSATIONS_FILE, JSON.stringify(obj));
+  } catch (err) {
+    console.warn('Could not persist conversations:', err.message);
+  }
+}
+
+// Debounce persistence to avoid excessive writes
+let persistTimer = null;
+function schedulePersist() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(persistConversations, 2000);
+}
 
 function getConversation(id) {
   if (!conversations.has(id)) {
-    conversations.set(id, { messages: [], updatedAt: Date.now() });
+    conversations.set(id, { messages: [], updatedAt: Date.now(), createdAt: Date.now() });
   }
   const conv = conversations.get(id);
   conv.updatedAt = Date.now();
   return conv;
 }
 
+// Generate a short title from the first user message
+function generateTitle(content) {
+  if (!content) return 'New conversation';
+  const clean = content.replace(/\n/g, ' ').trim();
+  return clean.length > 60 ? clean.slice(0, 57) + '...' : clean;
+}
+
 function appendMessage(convId, role, content) {
   const conv = getConversation(convId);
   conv.messages.push({ role, content });
+  // Set title from first user message
+  if (role === 'user' && !conv.title) {
+    conv.title = generateTitle(content);
+  }
   // Trim to keep context window manageable
   if (conv.messages.length > MAX_HISTORY) {
     conv.messages = conv.messages.slice(-MAX_HISTORY);
   }
   conv.updatedAt = Date.now();
+  schedulePersist();
 }
 
 // Cleanup expired conversations every 30 min
@@ -89,15 +136,22 @@ app.get("/api/conversations/:id", (req, res) => {
 // ── List conversations ─────────────────────────────────────────────
 app.get("/api/conversations", (req, res) => {
   if (!checkAuth(req, res)) return;
+  const prefix = req.query.prefix || req.query.user || '';
   const list = [];
   for (const [id, conv] of conversations) {
+    // Filter by prefix if provided (for user-scoped queries)
+    if (prefix && !id.startsWith(prefix)) continue;
     list.push({
       id,
+      title: conv.title || id,
       messageCount: conv.messages.length,
       updatedAt: conv.updatedAt,
+      createdAt: conv.createdAt || conv.updatedAt,
       lastMessage: conv.messages[conv.messages.length - 1]?.content?.slice(0, 100) || "",
     });
   }
+  // Sort by most recent first
+  list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   res.json({ conversations: list });
 });
 
@@ -202,6 +256,8 @@ app.post("/api/chat", async (req, res) => {
         const toolMsg = `\n\n🔧 *Calling tool:* \`${name}\`\n`;
         fullText += toolMsg;
         res.write(`event: step_delta\ndata: ${JSON.stringify({ text: toolMsg })}\n\n`);
+        // Emit structured tool_start event for frontend tracking
+        res.write(`event: tool_start\ndata: ${JSON.stringify({ tool: name, args: args || {} })}\n\n`);
       },
       onToolResult: (name, result) => {
         const statusEmoji = result.isError ? "❌" : "✅";
@@ -209,6 +265,8 @@ app.post("/api/chat", async (req, res) => {
         const toolMsg = `${statusEmoji} *Tool result:* ${preview}\n\n`;
         fullText += toolMsg;
         res.write(`event: step_delta\ndata: ${JSON.stringify({ text: toolMsg })}\n\n`);
+        // Emit structured tool_result event for frontend tracking
+        res.write(`event: tool_result\ndata: ${JSON.stringify({ tool: name, status: result.isError ? 'error' : 'success', result: preview })}\n\n`);
       },
     });
 
