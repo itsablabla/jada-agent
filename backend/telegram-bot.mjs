@@ -8,7 +8,7 @@
 import TelegramBot from "node-telegram-bot-api";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const JADA_API_URL = process.env.JADA_API_URL || "http://jada-agent-backend:3100";
+const JADA_API_URL = process.env.JADA_API_URL || "http://localhost:3200";
 const JADA_BEARER = process.env.JADA_BEARER_TOKEN || "jada-chat-2026";
 
 if (!BOT_TOKEN) {
@@ -104,6 +104,7 @@ bot.on("message", async (msg) => {
     const decoder = new TextDecoder();
     let fullText = "";
     let buffer = "";
+    let currentEvent = "";
 
     // Send typing every 4s while processing
     const typingInterval = setInterval(() => {
@@ -122,12 +123,18 @@ bot.on("message", async (msg) => {
         buffer = lines.pop() || ""; // keep incomplete line
 
         for (const line of lines) {
-          if (line.startsWith("data: ")) {
+          if (line.startsWith("event: ")) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
-              // Only accumulate from step_delta; step_complete contains the full text
-              // which would duplicate everything. step_complete includes conversation_id.
-              if (data.text && !data.conversation_id) fullText += data.text;
+              if (currentEvent === "step_complete" && data.text) {
+                // step_complete carries the full assembled text
+                fullText = data.text;
+              } else if (currentEvent === "step_delta" && data.text) {
+                // Accumulate deltas as they arrive
+                fullText += data.text;
+              }
             } catch {
               // skip malformed JSON
             }

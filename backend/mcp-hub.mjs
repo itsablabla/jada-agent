@@ -1,6 +1,10 @@
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
+const TOOL_CALL_TIMEOUT_MS = 30_000; // 30s per tool call
+const HEALTH_CHECK_INTERVAL_MS = 5 * 60_000; // check every 5 min
+const CONNECT_TIMEOUT_MS = 15_000; // 15s to connect to MCP server
+
 /**
  * McpHub — connects to multiple MCP servers, discovers tools,
  * and provides a unified interface for tool execution.
@@ -43,11 +47,11 @@ export class McpHub {
     },
     {
       name: "nextcloud",
-      url: "https://mcp-next.garzaos.online/mcp",
-      headers: {
-        Authorization: `Bearer ${process.env.NEXTCLOUD_MCP_TOKEN || ""}`,
-      },
-      enabled: !!process.env.NEXTCLOUD_MCP_TOKEN,
+      url: process.env.NEXTCLOUD_MCP_URL || "https://mcp-next.garzaos.online/mcp",
+      headers: process.env.NEXTCLOUD_MCP_TOKEN
+        ? { Authorization: `Bearer ${process.env.NEXTCLOUD_MCP_TOKEN}` }
+        : {},
+      enabled: true,
     },
     {
       name: "rube",
@@ -73,6 +77,30 @@ export class McpHub {
     }
   }
 
+  /** Start periodic health checks — reconnects dead servers automatically */
+  startHealthWatchdog() {
+    this.#watchdogTimer = setInterval(async () => {
+      for (const [name, entry] of this.#servers) {
+        if (entry.status !== "connected") {
+          console.log(`[watchdog] ${name} is ${entry.status}, attempting reconnect...`);
+          try {
+            await this.reconnect(name);
+            console.log(`[watchdog] ✓ ${name} reconnected`);
+          } catch (err) {
+            console.warn(`[watchdog] ✗ ${name} reconnect failed: ${err.message}`);
+          }
+        }
+      }
+    }, HEALTH_CHECK_INTERVAL_MS);
+    console.log(`[watchdog] Health check every ${HEALTH_CHECK_INTERVAL_MS / 1000}s`);
+  }
+
+  stopHealthWatchdog() {
+    if (this.#watchdogTimer) clearInterval(this.#watchdogTimer);
+  }
+
+  #watchdogTimer = null;
+
   async #connect(config) {
     const entry = { client: null, transport: null, tools: [], status: "connecting" };
     this.#servers.set(config.name, entry);
@@ -92,10 +120,21 @@ export class McpHub {
         version: "1.0.0",
       });
 
-      await client.connect(transport);
+      // Connect with timeout
+      await Promise.race([
+        client.connect(transport),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Connect timeout (${CONNECT_TIMEOUT_MS}ms)`)), CONNECT_TIMEOUT_MS)
+        ),
+      ]);
 
-      // Discover tools
-      const toolsResult = await client.listTools();
+      // Discover tools with timeout
+      const toolsResult = await Promise.race([
+        client.listTools(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`listTools timeout (${CONNECT_TIMEOUT_MS}ms)`)), CONNECT_TIMEOUT_MS)
+        ),
+      ]);
       const tools = toolsResult.tools || [];
 
       entry.client = client;
@@ -156,11 +195,32 @@ export class McpHub {
     }
 
     try {
-      const result = await entry.client.callTool({ name: toolName, arguments: args });
+      // Timeout wrapper — prevent hanging on unresponsive MCP servers
+      const result = await Promise.race([
+        entry.client.callTool({ name: toolName, arguments: args }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Tool call timeout (${TOOL_CALL_TIMEOUT_MS / 1000}s)`)), TOOL_CALL_TIMEOUT_MS)
+        ),
+      ]);
       return result;
     } catch (err) {
-      console.error(`Tool call ${qualifiedName} failed:`, err.message);
-      return { content: [{ type: "text", text: `Tool error: ${err.message}` }], isError: true };
+      const msg = err.message || "";
+      // Auto-reconnect on session errors (e.g. after MCP server restart)
+      if (msg.includes("Session not found") || msg.includes("session") || err.code === -32600) {
+        console.warn(`Session error on ${serverName}, reconnecting: ${msg}`);
+        try {
+          await this.reconnect(serverName);
+          console.log(`✓ Reconnected ${serverName}, retrying tool call`);
+          const retryEntry = this.#servers.get(serverName);
+          const result = await retryEntry.client.callTool({ name: toolName, arguments: args });
+          return result;
+        } catch (reconnectErr) {
+          console.error(`Reconnect+retry failed for ${qualifiedName}:`, reconnectErr.message);
+          return { content: [{ type: "text", text: `Tool error: reconnect failed — ${reconnectErr.message}` }], isError: true };
+        }
+      }
+      console.error(`Tool call ${qualifiedName} failed:`, msg);
+      return { content: [{ type: "text", text: `Tool error: ${msg}` }], isError: true };
     }
   }
 

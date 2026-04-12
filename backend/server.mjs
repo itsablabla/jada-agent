@@ -14,6 +14,8 @@ const MODEL = process.env.MODEL || "qwen/qwen3.5-plus-02-15";
 const BEARER_TOKEN = process.env.BEARER_TOKEN || "jada-chat-2026";
 const MAX_HISTORY = 50; // max messages per conversation (keeps context window manageable)
 const CONVERSATION_TTL_MS = 24 * 60 * 60 * 1000; // 24h TTL
+const REQUEST_TIMEOUT_MS = 120_000; // 2 min max per chat request
+const SSE_KEEPALIVE_MS = 15_000; // ping every 15s to prevent proxy timeout
 
 if (!OPENROUTER_KEY) {
   console.error("OPENROUTER_API_KEY is required");
@@ -99,6 +101,24 @@ app.get("/api/conversations", (req, res) => {
   res.json({ conversations: list });
 });
 
+// ── Reconnect MCP servers ────────────────────────────────────────────
+app.post("/api/reconnect", async (req, res) => {
+  if (!checkAuth(req, res)) return;
+  const { server } = req.body || {};
+  try {
+    if (server) {
+      await mcpHub.reconnect(server);
+      res.json({ status: "ok", reconnected: server, tools: mcpHub.getStatus()[server]?.tools || 0 });
+    } else {
+      // Reconnect all
+      await mcpHub.connectAll();
+      res.json({ status: "ok", reconnected: "all", ...mcpHub.getStatus() });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Chat endpoint (Persona-compatible SSE with agent loop) ─────────
 app.post("/api/chat", async (req, res) => {
   if (!checkAuth(req, res)) return;
@@ -122,6 +142,28 @@ app.post("/api/chat", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
+
+  // Keepalive ping — prevents reverse proxies (Caddy, nginx, Cloudflare) from
+  // killing the SSE connection during long tool calls
+  const keepalive = setInterval(() => {
+    if (!res.writableEnded) res.write(": keepalive\n\n");
+  }, SSE_KEEPALIVE_MS);
+
+  // Hard timeout — prevent zombie connections
+  const requestTimer = setTimeout(() => {
+    if (!res.writableEnded) {
+      console.warn(`[timeout] Chat request exceeded ${REQUEST_TIMEOUT_MS / 1000}s, aborting`);
+      res.write(`event: step_delta\ndata: ${JSON.stringify({ text: "\n\n[Request timed out after 2 minutes]" })}\n\n`);
+      res.write(`event: step_complete\ndata: ${JSON.stringify({ text: fullText + "\n\n[Request timed out]" })}\n\n`);
+      res.end();
+    }
+  }, REQUEST_TIMEOUT_MS);
+
+  // Cleanup on client disconnect
+  res.on("close", () => {
+    clearInterval(keepalive);
+    clearTimeout(requestTimer);
+  });
 
   let fullText = "";
 
@@ -167,9 +209,13 @@ app.post("/api/chat", async (req, res) => {
     appendMessage(convId, "assistant", fullText);
 
     // Persona step_complete event
+    clearInterval(keepalive);
+    clearTimeout(requestTimer);
     res.write(`event: step_complete\ndata: ${JSON.stringify({ text: fullText, conversation_id: convId })}\n\n`);
     res.end();
   } catch (err) {
+    clearInterval(keepalive);
+    clearTimeout(requestTimer);
     console.error("Agent loop error:", err);
     if (!res.headersSent) {
       res.status(500).json({ error: err.message });
@@ -198,10 +244,29 @@ async function start() {
   const toolCount = mcpHub.getAllToolsOpenAI().length;
   console.log(`MCP Hub ready — ${toolCount} tools available`);
 
-  app.listen(PORT, () => {
+  // Start health watchdog — auto-reconnects dead MCP servers
+  mcpHub.startHealthWatchdog();
+
+  const server = app.listen(PORT, () => {
     console.log(`Jada Agent Backend listening on :${PORT}`);
     console.log(`Model: ${MODEL}`);
     console.log(`Shared memory: enabled (${MAX_HISTORY} msg/conv, ${CONVERSATION_TTL_MS / 3600000}h TTL)`);
+    console.log(`Timeouts: request=${REQUEST_TIMEOUT_MS / 1000}s, keepalive=${SSE_KEEPALIVE_MS / 1000}s`);
+  });
+
+  // Graceful shutdown
+  for (const sig of ["SIGTERM", "SIGINT"]) {
+    process.on(sig, () => {
+      console.log(`Received ${sig}, shutting down...`);
+      mcpHub.stopHealthWatchdog();
+      server.close(() => process.exit(0));
+      setTimeout(() => process.exit(1), 5000); // force kill after 5s
+    });
+  }
+
+  // Catch unhandled rejections so process doesn't crash
+  process.on("unhandledRejection", (err) => {
+    console.error("Unhandled rejection:", err);
   });
 }
 
