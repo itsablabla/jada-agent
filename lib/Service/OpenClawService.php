@@ -12,7 +12,7 @@ use Psr\Log\LoggerInterface;
  */
 class OpenClawService {
     private const DEFAULT_URL = 'http://localhost:18789';
-    private const TIMEOUT = 120;
+    private const TIMEOUT = 600;
 
     private IConfig $config;
     private LoggerInterface $logger;
@@ -67,7 +67,7 @@ class OpenClawService {
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => json_encode($data),
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 120,
+            CURLOPT_TIMEOUT => 600,
             CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_HTTPHEADER => array_filter([
