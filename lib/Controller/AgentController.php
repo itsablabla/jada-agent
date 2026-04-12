@@ -192,7 +192,7 @@ class AgentController extends Controller {
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $payload,
             CURLOPT_RETURNTRANSFER => false,
-            CURLOPT_TIMEOUT => 600,
+            CURLOPT_TIMEOUT => 0,
             CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_HTTPHEADER => array_filter([
