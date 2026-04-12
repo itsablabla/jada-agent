@@ -13,6 +13,8 @@ return [
         ['name' => 'agent#chatSSE', 'url' => '/api/chat/sse', 'verb' => 'POST'],
         ['name' => 'agent#getConversations', 'url' => '/api/conversations', 'verb' => 'GET'],
         ['name' => 'agent#getConversation', 'url' => '/api/conversations/{id}', 'verb' => 'GET'],
+        ['name' => 'agent#getConversationToolCalls', 'url' => '/api/conversations/{id}/toolcalls', 'verb' => 'GET'],
+        ['name' => 'agent#getRecentToolCalls', 'url' => '/api/toolcalls/recent', 'verb' => 'GET'],
         ['name' => 'agent#deleteConversation', 'url' => '/api/conversations/{id}', 'verb' => 'DELETE'],
         ['name' => 'agent#getSkills', 'url' => '/api/skills', 'verb' => 'GET'],
         ['name' => 'agent#getModels', 'url' => '/api/models', 'verb' => 'GET'],

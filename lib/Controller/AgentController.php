@@ -239,6 +239,22 @@ class AgentController extends Controller {
     /**
      * @NoAdminRequired
      */
+    public function getConversationToolCalls(string $id): JSONResponse {
+        return new JSONResponse($this->openClaw->get('/api/conversations/' . urlencode($id) . '/toolcalls'));
+    }
+
+    /**
+     * @NoAdminRequired
+     */
+    public function getRecentToolCalls(): JSONResponse {
+        $user = $this->userSession->getUser();
+        $uid = $user ? $user->getUID() : 'anonymous';
+        return new JSONResponse($this->openClaw->get('/api/toolcalls/recent?prefix=' . urlencode($uid . ':') . '&limit=20'));
+    }
+
+    /**
+     * @NoAdminRequired
+     */
     public function deleteConversation(string $id): JSONResponse {
         return new JSONResponse($this->openClaw->delete('/api/conversations/' . urlencode($id)));
     }

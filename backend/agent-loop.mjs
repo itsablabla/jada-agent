@@ -14,6 +14,7 @@ export async function agentLoop({
   model,
   apiKey,
   mcpHub,
+  signal,
   onToken,
   onReasoning,
   onToolCall,
@@ -28,6 +29,11 @@ export async function agentLoop({
   let round = 0;
 
   while (round < MAX_TOOL_ROUNDS) {
+    // Check if client disconnected before starting a new round
+    if (signal?.aborted) {
+      console.log(`Agent loop aborted by client after ${round} rounds`);
+      return;
+    }
     round++;
 
     // Decide whether to include tools
@@ -127,6 +133,15 @@ export async function agentLoop({
     // Execute each tool call in parallel
     const toolResults = await Promise.all(
       toolCalls.map(async (tc) => {
+        // Skip if client disconnected
+        if (signal?.aborted) {
+          return {
+            role: "tool",
+            tool_call_id: tc.id,
+            content: "Aborted: client disconnected",
+          };
+        }
+
         let args = {};
         try {
           args = JSON.parse(tc.arguments || "{}");

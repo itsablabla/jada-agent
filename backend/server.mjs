@@ -66,11 +66,28 @@ function schedulePersist() {
 
 function getConversation(id) {
   if (!conversations.has(id)) {
-    conversations.set(id, { messages: [], updatedAt: Date.now(), createdAt: Date.now() });
+    conversations.set(id, { messages: [], toolCalls: [], updatedAt: Date.now(), createdAt: Date.now() });
   }
   const conv = conversations.get(id);
+  // Ensure toolCalls array exists (for legacy conversations loaded from disk)
+  if (!conv.toolCalls) conv.toolCalls = [];
   conv.updatedAt = Date.now();
   return conv;
+}
+
+function addToolCall(convId, name, status, result) {
+  const conv = getConversation(convId);
+  conv.toolCalls.push({
+    name,
+    status,
+    result: result || null,
+    timestamp: Date.now(),
+  });
+  // Keep last 50 tool calls per conversation
+  if (conv.toolCalls.length > 50) {
+    conv.toolCalls = conv.toolCalls.slice(-50);
+  }
+  schedulePersist();
 }
 
 // Generate a short title from the first user message
@@ -128,8 +145,32 @@ app.get("/tools", (req, res) => {
 app.get("/api/conversations/:id", (req, res) => {
   if (!checkAuth(req, res)) return;
   const conv = conversations.get(req.params.id);
-  if (!conv) return res.json({ messages: [] });
-  res.json({ messages: conv.messages, updatedAt: conv.updatedAt });
+  if (!conv) return res.json({ messages: [], toolCalls: [] });
+  res.json({ messages: conv.messages, toolCalls: conv.toolCalls || [], updatedAt: conv.updatedAt });
+});
+
+// ── Tool calls for a conversation ─────────────────────────────────
+app.get("/api/conversations/:id/toolcalls", (req, res) => {
+  if (!checkAuth(req, res)) return;
+  const conv = conversations.get(req.params.id);
+  if (!conv) return res.json({ toolCalls: [] });
+  res.json({ toolCalls: conv.toolCalls || [] });
+});
+
+// ── Recent tool calls across all conversations ────────────────────
+app.get("/api/toolcalls/recent", (req, res) => {
+  if (!checkAuth(req, res)) return;
+  const prefix = req.query.prefix || '';
+  const limit = parseInt(req.query.limit || '20', 10);
+  const all = [];
+  for (const [id, conv] of conversations) {
+    if (prefix && !id.startsWith(prefix)) continue;
+    for (const tc of (conv.toolCalls || [])) {
+      all.push({ ...tc, conversationId: id });
+    }
+  }
+  all.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  res.json({ toolCalls: all.slice(0, limit) });
 });
 
 // ── List conversations ─────────────────────────────────────────────
@@ -209,10 +250,22 @@ app.post("/api/chat", async (req, res) => {
     if (!res.writableEnded) res.write(": keepalive\n\n");
   }, SSE_KEEPALIVE_MS);
 
+  // AbortController — signals the agent loop to stop on client disconnect
+  const abortController = new AbortController();
+
   // Cleanup on client disconnect
+  let clientDisconnected = false;
   res.on("close", () => {
+    clientDisconnected = true;
     clearInterval(keepalive);
+    abortController.abort();
   });
+
+  // Safe write — silently ignores writes after client disconnect
+  function safeWrite(data) {
+    if (clientDisconnected || res.writableEnded) return;
+    try { res.write(data); } catch { /* client gone */ }
+  }
 
   let fullText = "";
 
@@ -233,48 +286,71 @@ app.post("/api/chat", async (req, res) => {
       model: useModel,
       apiKey: OPENROUTER_KEY,
       mcpHub,
+      signal: abortController.signal,
       onToken: (token) => {
         fullText += token;
-        res.write(`event: step_delta\ndata: ${JSON.stringify({ text: token })}\n\n`);
+        safeWrite(`event: step_delta\ndata: ${JSON.stringify({ text: token })}\n\n`);
       },
       onReasoning: (text) => {
-        res.write(`event: reason_delta\ndata: ${JSON.stringify({ text })}\n\n`);
+        safeWrite(`event: reason_delta\ndata: ${JSON.stringify({ text })}\n\n`);
       },
       onToolCall: (name, args) => {
         const toolMsg = `\n\n🔧 *Calling tool:* \`${name}\`\n`;
         fullText += toolMsg;
-        res.write(`event: step_delta\ndata: ${JSON.stringify({ text: toolMsg })}\n\n`);
+        safeWrite(`event: step_delta\ndata: ${JSON.stringify({ text: toolMsg })}\n\n`);
         // Emit structured tool_start event for frontend tracking
-        res.write(`event: tool_start\ndata: ${JSON.stringify({ tool: name, args: args || {} })}\n\n`);
+        safeWrite(`event: tool_start\ndata: ${JSON.stringify({ tool: name, args: args || {} })}\n\n`);
+        // Persist tool call start
+        addToolCall(convId, name, 'running', null);
       },
       onToolResult: (name, result) => {
         const statusEmoji = result.isError ? "❌" : "✅";
         const preview = result.content?.slice(0, 150) || "done";
         const toolMsg = `${statusEmoji} *Tool result:* ${preview}\n\n`;
         fullText += toolMsg;
-        res.write(`event: step_delta\ndata: ${JSON.stringify({ text: toolMsg })}\n\n`);
+        safeWrite(`event: step_delta\ndata: ${JSON.stringify({ text: toolMsg })}\n\n`);
         // Emit structured tool_result event for frontend tracking
-        res.write(`event: tool_result\ndata: ${JSON.stringify({ tool: name, status: result.isError ? 'error' : 'success', result: preview })}\n\n`);
+        safeWrite(`event: tool_result\ndata: ${JSON.stringify({ tool: name, status: result.isError ? 'error' : 'success', result: preview })}\n\n`);
+        // Update persisted tool call with result
+        const conv = getConversation(convId);
+        const tc = [...conv.toolCalls].reverse().find(t => t.name === name && t.status === 'running');
+        if (tc) {
+          tc.status = result.isError ? 'error' : 'success';
+          tc.result = preview;
+        }
+        schedulePersist();
       },
     });
 
-    // Store assistant response in shared memory
-    appendMessage(convId, "assistant", fullText);
+    // Always store assistant response in shared memory (even if client disconnected)
+    if (fullText) {
+      appendMessage(convId, "assistant", fullText);
+    }
 
-    // Persona step_complete event
+    // Send step_complete only if client is still connected
     clearInterval(keepalive);
-    res.write(`event: step_complete\ndata: ${JSON.stringify({ text: fullText, conversation_id: convId })}\n\n`);
-    res.end();
+    if (!clientDisconnected) {
+      safeWrite(`event: step_complete\ndata: ${JSON.stringify({ text: fullText, conversation_id: convId })}\n\n`);
+      try { res.end(); } catch { /* already closed */ }
+    }
   } catch (err) {
     clearInterval(keepalive);
     console.error("Agent loop error:", err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
-    } else {
-      const errMsg = `\n\nSorry, an error occurred: ${err.message}`;
-      res.write(`event: step_delta\ndata: ${JSON.stringify({ text: errMsg })}\n\n`);
-      res.write(`event: step_complete\ndata: ${JSON.stringify({ text: fullText + errMsg })}\n\n`);
-      res.end();
+
+    // Always persist whatever text was accumulated (partial response is better than nothing)
+    if (fullText) {
+      appendMessage(convId, "assistant", fullText);
+    }
+
+    if (!clientDisconnected) {
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message });
+      } else {
+        const errMsg = `\n\nSorry, an error occurred: ${err.message}`;
+        safeWrite(`event: step_delta\ndata: ${JSON.stringify({ text: errMsg })}\n\n`);
+        safeWrite(`event: step_complete\ndata: ${JSON.stringify({ text: fullText + errMsg, conversation_id: convId })}\n\n`);
+        try { res.end(); } catch { /* already closed */ }
+      }
     }
   }
 });
