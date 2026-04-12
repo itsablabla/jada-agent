@@ -3,6 +3,7 @@
     height: calc(100vh - 50px);
     margin: 0;
     padding: 0;
+    background: #0d0d14;
 }
 
 #content-vue #jada-agent-app,
@@ -17,4 +18,39 @@
 #app-content {
     padding: 0 !important;
     overflow: hidden !important;
+}
+
+/* Hide Nextcloud's default app navigation sidebar — we have our own */
+#app-navigation-vue,
+#app-navigation {
+    display: none !important;
+}
+
+/* Ensure full width */
+#app-content-vue,
+#app-content {
+    margin-left: 0 !important;
+}
+
+/* Dark scrollbar for the dark theme */
+#jada-agent-app * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.1) transparent;
+}
+
+#jada-agent-app *::-webkit-scrollbar {
+    width: 6px;
+}
+
+#jada-agent-app *::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#jada-agent-app *::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.1);
+    border-radius: 3px;
+}
+
+#jada-agent-app *::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,0.2);
 }

@@ -19,6 +19,16 @@ return [
         ['name' => 'agent#getConfig', 'url' => '/api/config', 'verb' => 'GET'],
         ['name' => 'agent#getSessions', 'url' => '/api/sessions', 'verb' => 'GET'],
         
+        // Workspace API routes
+        ['name' => 'workspace#getWorkspaces', 'url' => '/api/workspaces', 'verb' => 'GET'],
+        ['name' => 'workspace#getWorkspace', 'url' => '/api/workspaces/{id}', 'verb' => 'GET'],
+        ['name' => 'workspace#createWorkspace', 'url' => '/api/workspaces', 'verb' => 'POST'],
+        ['name' => 'workspace#updateWorkspace', 'url' => '/api/workspaces/{id}', 'verb' => 'PUT'],
+        ['name' => 'workspace#deleteWorkspace', 'url' => '/api/workspaces/{id}', 'verb' => 'DELETE'],
+        
+        // User profile
+        ['name' => 'workspace#getProfile', 'url' => '/api/profile', 'verb' => 'GET'],
+        
         // Settings
         ['name' => 'settings#getSettings', 'url' => '/api/settings', 'verb' => 'GET'],
         ['name' => 'settings#saveSettings', 'url' => '/api/settings', 'verb' => 'PUT'],

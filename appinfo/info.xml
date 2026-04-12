@@ -21,7 +21,7 @@
 - OpenClaw instance (self-hosted Docker container)
 - API key for your LLM provider (OpenRouter, Anthropic, OpenAI, etc.)
     ]]></description>
-    <version>0.1.1</version>
+    <version>0.2.0</version>
     <licence>AGPL-3.0-or-later</licence>
     <author mail="garzasecure@pm.me">Garza OS</author>
     <category>integration</category>

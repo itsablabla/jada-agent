@@ -1,88 +1,168 @@
 <template>
 	<div class="jada-chat">
-		<div class="jada-chat-messages" ref="messages">
-			<div v-if="messages.length === 0" class="jada-chat-empty">
-				<div class="jada-chat-empty-icon">
-					<svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" width="64" height="64">
-						<circle cx="16" cy="16" r="14" fill="#1a1a2e" stroke="#e94560" stroke-width="1.5"/>
-						<circle cx="11" cy="13" r="2" fill="#e94560"/>
-						<circle cx="21" cy="13" r="2" fill="#e94560"/>
-						<path d="M10 20 Q16 25 22 20" stroke="#e94560" stroke-width="1.5" fill="none" stroke-linecap="round"/>
-					</svg>
-				</div>
-				<h2>Chat with Jada</h2>
-				<p>Send a message to your AI agent. Jada has access to your MCP tools and skills.</p>
-				<div class="jada-chat-suggestions">
-					<button v-for="s in suggestions" :key="s" class="jada-suggestion" @click="sendMessage(s)">
-						{{ s }}
-					</button>
-				</div>
+		<!-- Empty state -->
+		<div v-if="messages.length === 0 && !loading" class="jada-chat-empty">
+			<div class="jada-chat-empty-icon">
+				<svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+					<circle cx="16" cy="16" r="14" fill="#1a1a2e" stroke="#e94560" stroke-width="1.5"/>
+					<circle cx="11" cy="13" r="2" fill="#e94560"/>
+					<circle cx="21" cy="13" r="2" fill="#e94560"/>
+					<path d="M10 20 Q16 25 22 20" stroke="#e94560" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+				</svg>
 			</div>
+			<h2>Hello, {{ userName }}</h2>
+			<p>{{ store.totalTools }} tools across {{ store.mcpServers.length }} servers. How can I help?</p>
+			<div class="jada-suggestions">
+				<button v-for="s in suggestions" :key="s" class="jada-chip" @click="handleSend(s)">
+					{{ s }}
+				</button>
+			</div>
+		</div>
 
-			<div v-for="(msg, i) in messages" :key="i" :class="['jada-message', msg.role]">
-				<div class="jada-message-avatar">
-					<span v-if="msg.role === 'user'">You</span>
+		<!-- Messages -->
+		<div v-else class="jada-chat-messages" ref="messagesEl">
+			<div v-for="(msg, i) in messages" :key="i" :class="['jada-msg', msg.role]">
+				<div class="jada-msg-avatar">
+					<span v-if="msg.role === 'user'">{{ userInitials }}</span>
 					<span v-else>J</span>
 				</div>
-				<div class="jada-message-content">
-					<div class="jada-message-text" v-html="formatMessage(msg.content)"></div>
-					<div class="jada-message-meta" v-if="msg.timestamp">
+				<div class="jada-msg-body">
+					<!-- Tool calls -->
+					<div v-if="msg.toolCalls && msg.toolCalls.length" class="jada-tool-calls">
+						<div v-for="(tc, ti) in msg.toolCalls" :key="ti" class="jada-tool-call">
+							<div class="jada-tool-header">
+								<span class="jada-tool-icon">{{ tc.status === 'success' ? '&#9989;' : '&#128295;' }}</span>
+								<span class="jada-tool-name">{{ tc.name }}</span>
+							</div>
+							<div v-if="tc.result" class="jada-tool-result">
+								<pre>{{ typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2) }}</pre>
+							</div>
+						</div>
+					</div>
+					<!-- Text content -->
+					<div class="jada-msg-text" v-html="formatMessage(msg.content)"></div>
+					<div class="jada-msg-meta">
 						{{ formatTime(msg.timestamp) }}
+						<span v-if="msg.toolCalls && msg.toolCalls.length"> &middot; {{ msg.toolCalls.length }} tool call{{ msg.toolCalls.length > 1 ? 's' : '' }}</span>
 					</div>
 				</div>
 			</div>
 
-			<div v-if="loading" class="jada-message assistant">
-				<div class="jada-message-avatar"><span>J</span></div>
-				<div class="jada-message-content">
-					<div class="jada-typing">
+			<!-- Streaming indicator -->
+			<div v-if="loading" class="jada-msg assistant">
+				<div class="jada-msg-avatar"><span>J</span></div>
+				<div class="jada-msg-body">
+					<!-- Show streaming tool calls -->
+					<div v-if="streamingToolCalls.length" class="jada-tool-calls">
+						<div v-for="(tc, ti) in streamingToolCalls" :key="ti" class="jada-tool-call">
+							<div class="jada-tool-header">
+								<span class="jada-tool-icon spinning">&#128295;</span>
+								<span class="jada-tool-name">{{ tc.name }}</span>
+							</div>
+							<div v-if="tc.result" class="jada-tool-result">
+								<pre>{{ typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2) }}</pre>
+							</div>
+						</div>
+					</div>
+					<!-- Show streaming text -->
+					<div v-if="streamingText" class="jada-msg-text" v-html="formatMessage(streamingText)"></div>
+					<div v-else class="jada-typing">
 						<span></span><span></span><span></span>
 					</div>
 				</div>
 			</div>
 		</div>
 
+		<!-- Input area -->
 		<div class="jada-chat-input-area">
-			<div class="jada-chat-input-wrapper">
+			<div class="jada-chat-input-row">
 				<textarea
 					ref="input"
 					v-model="inputText"
 					class="jada-chat-input"
-					placeholder="Message Jada..."
+					:placeholder="'Message Jada about ' + activeWsName + '...'"
 					rows="1"
-					@keydown.enter.exact.prevent="sendMessage()"
+					@keydown.enter.exact.prevent="handleSend()"
 					@input="autoResize"
 				></textarea>
-				<button class="jada-send-btn" @click="sendMessage()" :disabled="!inputText.trim() || loading">
-					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<button class="jada-send-btn" @click="handleSend()" :disabled="!inputText.trim() || loading">
+					<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
 					</svg>
 				</button>
+			</div>
+			<div class="jada-input-footer">
+				<span class="jada-input-model">Qwen 3.5 Plus</span>
+				<span class="jada-input-tools">&middot; {{ store.totalTools }} tools</span>
+				<span class="jada-input-ws">&middot; Workspace: {{ activeWsName }}</span>
 			</div>
 		</div>
 	</div>
 </template>
 
 <script>
+import { store, actions } from '../store.js'
 import api from '../api.js'
 
 export default {
 	name: 'ChatView',
 	data() {
 		return {
+			store,
 			messages: [],
 			inputText: '',
 			loading: false,
+			streamingText: '',
+			streamingToolCalls: [],
+			currentCancel: null,
 			suggestions: [
-				'What can you do?',
 				'List my Nextcloud files',
+				'Check my calendar',
+				'Read my emails',
+				'Search documents in Kuse',
+				'What tools do you have?',
 				'Check system status',
-				'What skills do you have?',
 			],
 		}
 	},
+	computed: {
+		activeWsName() {
+			return actions.getActiveWorkspace().name
+		},
+		userName() {
+			return store.userProfile?.displayName || 'User'
+		},
+		userInitials() {
+			const name = this.userName
+			const parts = name.split(' ')
+			if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+			return name.substring(0, 2).toUpperCase()
+		},
+	},
+	watch: {
+		'store.activeConversationId'() {
+			this.loadConversation()
+		},
+	},
+	mounted() {
+		if (store.activeConversationId) {
+			this.loadConversation()
+		}
+	},
 	methods: {
-		async sendMessage(text) {
+		async loadConversation() {
+			if (!store.activeConversationId) return
+			try {
+				const data = await api.getConversation(store.activeConversationId)
+				if (data?.messages) {
+					this.messages = data.messages
+				}
+			} catch {
+				// New conversation, no messages yet
+			}
+		},
+
+		async handleSend(text) {
 			const message = text || this.inputText.trim()
 			if (!message || this.loading) return
 
@@ -94,25 +174,105 @@ export default {
 			})
 			this.scrollToBottom()
 			this.loading = true
+			this.streamingText = ''
+			this.streamingToolCalls = []
+
+			if (!store.activeConversationId) {
+				actions.startNewChat()
+			}
 
 			try {
-				const result = await api.sendMessage(message)
+				const { promise, cancel } = api.createSSEStream(message, store.activeConversationId)
+				this.currentCancel = cancel
+
+				const response = await promise
+				if (!response.ok) {
+					throw new Error(`HTTP ${response.status}`)
+				}
+
+				const reader = response.body.getReader()
+				const decoder = new TextDecoder()
+				let buffer = ''
+				let fullText = ''
+				const toolCalls = []
+
+				while (true) {
+					const { done, value } = await reader.read()
+					if (done) break
+
+					buffer += decoder.decode(value, { stream: true })
+					const lines = buffer.split('\n')
+					buffer = lines.pop() || ''
+
+					for (const line of lines) {
+						if (!line.startsWith('data: ')) continue
+						const data = line.slice(6).trim()
+						if (data === '[DONE]') continue
+
+						try {
+							const parsed = JSON.parse(data)
+
+							// Handle Persona SSE format
+							if (parsed.type === 'text_delta' || parsed.type === 'content_delta') {
+								fullText += parsed.delta || parsed.text || ''
+								this.streamingText = fullText
+							} else if (parsed.type === 'step_delta' || parsed.type === 'tool_start') {
+								const name = parsed.tool || parsed.name || 'tool'
+								toolCalls.push({ name, status: 'running', result: null })
+								this.streamingToolCalls = [...toolCalls]
+								actions.addToolCall({ name, timestamp: new Date() })
+							} else if (parsed.type === 'step_complete' || parsed.type === 'tool_result') {
+								const last = toolCalls[toolCalls.length - 1]
+								if (last) {
+									last.status = 'success'
+									last.result = parsed.result || parsed.output || null
+								}
+								this.streamingToolCalls = [...toolCalls]
+							} else if (parsed.choices?.[0]?.delta?.content) {
+								// OpenAI format fallback
+								fullText += parsed.choices[0].delta.content
+								this.streamingText = fullText
+							}
+						} catch {
+							// Ignore unparseable lines
+						}
+					}
+					this.scrollToBottom()
+				}
+
+				// Finalize message
 				this.messages.push({
 					role: 'assistant',
-					content: result.response || result.message || result.text || JSON.stringify(result),
+					content: fullText || this.streamingText || '(No response)',
 					timestamp: new Date(),
+					toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
 				})
 			} catch (err) {
-				this.messages.push({
-					role: 'assistant',
-					content: 'Error: ' + (err.response?.data?.error || err.message || 'Failed to reach agent'),
-					timestamp: new Date(),
-				})
+				if (err.name === 'AbortError') return
+				// Fallback to non-streaming
+				try {
+					const result = await api.sendMessage(message, store.activeConversationId)
+					this.messages.push({
+						role: 'assistant',
+						content: result.response || result.message || JSON.stringify(result),
+						timestamp: new Date(),
+					})
+				} catch (fallbackErr) {
+					this.messages.push({
+						role: 'assistant',
+						content: 'Error: ' + (fallbackErr.response?.data?.error || fallbackErr.message || 'Failed to reach agent'),
+						timestamp: new Date(),
+					})
+				}
 			} finally {
 				this.loading = false
+				this.streamingText = ''
+				this.streamingToolCalls = []
+				this.currentCancel = null
 				this.scrollToBottom()
 			}
 		},
+
 		formatMessage(text) {
 			if (!text) return ''
 			return text
@@ -123,23 +283,29 @@ export default {
 				.replace(/`([^`]+)`/g, '<code>$1</code>')
 				.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
 		},
+
 		formatTime(date) {
 			if (!date) return ''
-			const d = new Date(date)
-			return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+			return new Date(date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 		},
+
 		scrollToBottom() {
 			this.$nextTick(() => {
-				const el = this.$refs.messages
+				const el = this.$refs.messagesEl
 				if (el) el.scrollTop = el.scrollHeight
 			})
 		},
+
 		autoResize() {
 			const el = this.$refs.input
 			if (!el) return
 			el.style.height = 'auto'
 			el.style.height = Math.min(el.scrollHeight, 120) + 'px'
 		},
+	},
+
+	beforeUnmount() {
+		if (this.currentCancel) this.currentCancel()
 	},
 }
 </script>
@@ -148,28 +314,24 @@ export default {
 .jada-chat {
 	display: flex;
 	flex-direction: column;
-	height: calc(100vh - 50px);
+	height: 100%;
+	min-height: 0;
 }
 
-.jada-chat-messages {
-	flex: 1;
-	overflow-y: auto;
-	padding: 24px 32px;
-}
-
+/* ─── Empty state ─── */
 .jada-chat-empty {
+	flex: 1;
 	display: flex;
 	flex-direction: column;
 	align-items: center;
 	justify-content: center;
-	height: 100%;
 	text-align: center;
-	color: var(--color-text-maxcontrast);
+	padding: 40px 20px;
 }
 
 .jada-chat-empty-icon {
 	margin-bottom: 20px;
-	opacity: 0.8;
+	opacity: 0.9;
 	animation: float 3s ease-in-out infinite;
 }
 
@@ -179,121 +341,196 @@ export default {
 }
 
 .jada-chat-empty h2 {
-	font-size: 22px;
+	font-size: 24px;
 	font-weight: 700;
-	color: var(--color-main-text);
-	margin-bottom: 8px;
+	color: #fff;
+	margin: 0 0 8px;
 }
 
 .jada-chat-empty p {
 	font-size: 14px;
-	max-width: 400px;
-	margin-bottom: 24px;
+	color: #8b8b9e;
+	margin: 0 0 24px;
 }
 
-.jada-chat-suggestions {
+.jada-suggestions {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 8px;
 	justify-content: center;
+	max-width: 600px;
 }
 
-.jada-suggestion {
+.jada-chip {
 	padding: 8px 16px;
 	border-radius: 20px;
-	border: 1px solid var(--color-border);
-	background: var(--color-background-dark);
-	color: var(--color-main-text);
+	border: 1px solid rgba(255,255,255,0.1);
+	background: rgba(255,255,255,0.04);
+	color: #e8e8ef;
 	font-size: 13px;
 	cursor: pointer;
 	transition: all 0.2s;
 }
 
-.jada-suggestion:hover {
+.jada-chip:hover {
 	border-color: #e94560;
-	background: rgba(233, 69, 96, 0.05);
+	background: rgba(233, 69, 96, 0.1);
 	color: #e94560;
 }
 
-.jada-message {
+/* ─── Messages ─── */
+.jada-chat-messages {
+	flex: 1;
+	overflow-y: auto;
+	padding: 20px 24px;
+}
+
+.jada-msg {
 	display: flex;
 	gap: 12px;
 	margin-bottom: 20px;
 	max-width: 800px;
 }
 
-.jada-message.user {
+.jada-msg.user {
 	margin-left: auto;
 	flex-direction: row-reverse;
 }
 
-.jada-message-avatar {
-	width: 36px;
-	height: 36px;
-	border-radius: 10px;
+.jada-msg-avatar {
+	width: 32px;
+	height: 32px;
+	border-radius: 8px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	font-size: 13px;
+	font-size: 12px;
 	font-weight: 700;
 	flex-shrink: 0;
+	color: #fff;
 }
 
-.jada-message.user .jada-message-avatar {
+.jada-msg.user .jada-msg-avatar {
 	background: linear-gradient(135deg, #3b82f6, #2563eb);
-	color: #fff;
 }
 
-.jada-message.assistant .jada-message-avatar {
+.jada-msg.assistant .jada-msg-avatar {
 	background: linear-gradient(135deg, #e94560, #c23152);
-	color: #fff;
 }
 
-.jada-message-content {
-	background: var(--color-background-dark);
-	border: 1px solid var(--color-border);
-	border-radius: 14px;
-	padding: 12px 16px;
-	max-width: 600px;
+.jada-msg-body {
+	max-width: 650px;
+	min-width: 0;
 }
 
-.jada-message.user .jada-message-content {
+.jada-msg.user .jada-msg-body {
+	text-align: right;
+}
+
+.jada-msg-text {
+	background: #1e1e2a;
+	border: 1px solid rgba(255,255,255,0.06);
+	border-radius: 12px;
+	padding: 10px 14px;
+	font-size: 14px;
+	line-height: 1.6;
+	color: #e8e8ef;
+	display: inline-block;
+	text-align: left;
+}
+
+.jada-msg.user .jada-msg-text {
 	background: linear-gradient(135deg, #3b82f6, #2563eb);
 	color: #fff;
 	border: none;
 }
 
-.jada-message-text {
-	font-size: 14px;
-	line-height: 1.6;
+.jada-msg-text code {
+	background: rgba(0,0,0,0.2);
+	padding: 1px 5px;
+	border-radius: 4px;
+	font-size: 13px;
+	font-family: 'SF Mono', 'Fira Code', monospace;
 }
 
-.jada-message-text code {
-	background: rgba(0,0,0,0.1);
-	padding: 2px 6px;
-	border-radius: 4px;
+.jada-msg-meta {
+	font-size: 11px;
+	color: #555;
+	margin-top: 4px;
+	padding: 0 4px;
+}
+
+/* ─── Tool calls ─── */
+.jada-tool-calls {
+	margin-bottom: 8px;
+}
+
+.jada-tool-call {
+	background: #1a1a24;
+	border: 1px solid rgba(255,255,255,0.06);
+	border-radius: 8px;
+	margin-bottom: 6px;
+	overflow: hidden;
+}
+
+.jada-tool-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 10px;
+	font-size: 12px;
+	font-weight: 600;
+	color: #e94560;
+}
+
+.jada-tool-icon {
 	font-size: 13px;
 }
 
-.jada-message-meta {
+.jada-tool-icon.spinning {
+	animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+	from { transform: rotate(0deg); }
+	to { transform: rotate(360deg); }
+}
+
+.jada-tool-name {
+	font-family: 'SF Mono', 'Fira Code', monospace;
+	font-size: 12px;
+}
+
+.jada-tool-result {
+	padding: 6px 10px;
+	border-top: 1px solid rgba(255,255,255,0.04);
+	background: rgba(0,0,0,0.15);
+}
+
+.jada-tool-result pre {
+	margin: 0;
 	font-size: 11px;
-	color: var(--color-text-maxcontrast);
-	margin-top: 6px;
+	color: #8b8b9e;
+	white-space: pre-wrap;
+	word-break: break-all;
+	max-height: 120px;
+	overflow-y: auto;
+	font-family: 'SF Mono', 'Fira Code', monospace;
 }
 
-.jada-message.user .jada-message-meta {
-	color: rgba(255,255,255,0.7);
-}
-
+/* ─── Typing indicator ─── */
 .jada-typing {
 	display: flex;
 	gap: 4px;
-	padding: 4px 0;
+	padding: 8px 14px;
+	background: #1e1e2a;
+	border-radius: 12px;
+	display: inline-flex;
 }
 
 .jada-typing span {
-	width: 8px;
-	height: 8px;
+	width: 7px;
+	height: 7px;
 	border-radius: 50%;
 	background: #e94560;
 	animation: bounce 1.4s ease-in-out infinite;
@@ -307,47 +544,50 @@ export default {
 	40% { transform: scale(1); opacity: 1; }
 }
 
+/* ─── Input area ─── */
 .jada-chat-input-area {
-	padding: 16px 32px 24px;
-	border-top: 1px solid var(--color-border);
-	background: var(--color-main-background);
+	padding: 12px 24px 16px;
+	border-top: 1px solid rgba(255,255,255,0.06);
 }
 
-.jada-chat-input-wrapper {
+.jada-chat-input-row {
 	display: flex;
 	align-items: flex-end;
 	gap: 8px;
-	max-width: 800px;
-	margin: 0 auto;
-	background: var(--color-background-dark);
-	border: 1px solid var(--color-border);
-	border-radius: 16px;
+	background: #1e1e2a;
+	border: 1px solid rgba(255,255,255,0.08);
+	border-radius: 14px;
 	padding: 8px 8px 8px 16px;
+	max-width: 800px;
 	transition: border-color 0.2s;
 }
 
-.jada-chat-input-wrapper:focus-within {
-	border-color: #e94560;
-	box-shadow: 0 0 0 2px rgba(233, 69, 96, 0.15);
+.jada-chat-input-row:focus-within {
+	border-color: rgba(233, 69, 96, 0.5);
 }
 
 .jada-chat-input {
 	flex: 1;
 	border: none;
 	background: transparent;
-	color: var(--color-main-text);
+	color: #e8e8ef;
 	font-size: 14px;
 	line-height: 1.5;
 	resize: none;
 	outline: none;
-	min-height: 24px;
+	min-height: 22px;
 	max-height: 120px;
-	padding: 4px 0;
+	padding: 2px 0;
+	font-family: inherit;
+}
+
+.jada-chat-input::placeholder {
+	color: #555;
 }
 
 .jada-send-btn {
-	width: 36px;
-	height: 36px;
+	width: 34px;
+	height: 34px;
 	border-radius: 10px;
 	border: none;
 	background: linear-gradient(135deg, #e94560, #c23152);
@@ -361,12 +601,19 @@ export default {
 }
 
 .jada-send-btn:hover:not(:disabled) {
-	box-shadow: 0 4px 12px rgba(233, 69, 96, 0.4);
-	transform: translateY(-1px);
+	box-shadow: 0 2px 10px rgba(233, 69, 96, 0.4);
 }
 
 .jada-send-btn:disabled {
-	opacity: 0.4;
+	opacity: 0.3;
 	cursor: not-allowed;
+}
+
+.jada-input-footer {
+	display: flex;
+	gap: 6px;
+	padding: 6px 4px 0;
+	font-size: 11px;
+	color: #444;
 }
 </style>
