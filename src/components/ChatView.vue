@@ -293,6 +293,8 @@ export default {
 				this.streamingToolCalls = []
 				this.currentCancel = null
 				this.scrollToBottom()
+				// Refresh conversation list in sidebar so new/updated conversations appear
+				actions.loadConversations()
 			}
 		},
 

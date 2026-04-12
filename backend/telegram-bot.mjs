@@ -136,10 +136,76 @@ bot.onText(/\/status/, async (msg) => {
 
 bot.on("message", async (msg) => {
   if (msg.text?.startsWith("/")) return;
-  if (!msg.text) return;
 
   const chatId = msg.chat.id;
   const convId = getConvId(chatId);
+
+  // Determine what the user sent — text, voice, photo, or document
+  let userText = msg.text || "";
+  let mediaCaption = msg.caption || "";
+
+  // ── Voice / Audio ──────────────────────────────────────────────
+  if (msg.voice || msg.audio) {
+    const fileId = (msg.voice || msg.audio).file_id;
+    const duration = (msg.voice || msg.audio).duration || 0;
+    bot.sendChatAction(chatId, "typing");
+    try {
+      const fileUrl = await bot.getFileLink(fileId);
+      // Ask the agent to transcribe and handle the voice memo
+      userText =
+        `[Voice memo received — ${duration}s duration]\n` +
+        `Audio file URL: ${fileUrl}\n` +
+        (mediaCaption ? `Caption: ${mediaCaption}\n` : "") +
+        `Please download this audio, upload it to Nextcloud under /Telegram Media/, ` +
+        `transcribe it, and respond to the content.`;
+    } catch (err) {
+      bot.sendMessage(chatId, `❌ Could not fetch voice file: ${err.message}`);
+      return;
+    }
+  }
+
+  // ── Photo ──────────────────────────────────────────────────────
+  else if (msg.photo && msg.photo.length > 0) {
+    // Telegram sends multiple sizes — pick the largest
+    const photo = msg.photo[msg.photo.length - 1];
+    bot.sendChatAction(chatId, "typing");
+    try {
+      const fileUrl = await bot.getFileLink(photo.file_id);
+      userText =
+        `[Photo received — ${photo.width}x${photo.height}]\n` +
+        `Image URL: ${fileUrl}\n` +
+        (mediaCaption ? `Caption: ${mediaCaption}\n` : "") +
+        `Please download this image, upload it to Nextcloud under /Telegram Media/, ` +
+        `and describe or process the content as appropriate.`;
+    } catch (err) {
+      bot.sendMessage(chatId, `❌ Could not fetch photo: ${err.message}`);
+      return;
+    }
+  }
+
+  // ── Document / File ────────────────────────────────────────────
+  else if (msg.document) {
+    const doc = msg.document;
+    bot.sendChatAction(chatId, "typing");
+    try {
+      const fileUrl = await bot.getFileLink(doc.file_id);
+      userText =
+        `[Document received — "${doc.file_name || "file"}", ${doc.file_size || 0} bytes, MIME: ${doc.mime_type || "unknown"}]\n` +
+        `File URL: ${fileUrl}\n` +
+        (mediaCaption ? `Caption: ${mediaCaption}\n` : "") +
+        `Please download this file, upload it to Nextcloud under /Telegram Media/, ` +
+        `and summarize or process it as appropriate.`;
+    } catch (err) {
+      bot.sendMessage(chatId, `❌ Could not fetch document: ${err.message}`);
+      return;
+    }
+  }
+
+  // ── Sticker / Other unsupported types ──────────────────────────
+  else if (!userText) {
+    bot.sendMessage(chatId, "I can handle text, voice memos, photos, and documents. Try sending one of those!");
+    return;
+  }
 
   bot.sendChatAction(chatId, "typing");
 
@@ -151,7 +217,7 @@ bot.on("message", async (msg) => {
         Authorization: `Bearer ${JADA_BEARER}`,
       },
       body: JSON.stringify({
-        messages: [{ role: "user", content: msg.text }],
+        messages: [{ role: "user", content: userText }],
         conversation_id: convId,
         channel: "telegram",
         channel_meta: {
