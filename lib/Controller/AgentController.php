@@ -12,7 +12,13 @@ use OCP\IRequest;
 use OCP\IUserSession;
 
 /**
- * Proxy controller for OpenClaw Gateway API.
+ * Thin proxy controller for Hermes backend.
+ *
+ * Hermes is the authoritative owner of conversation state, user scoping,
+ * tool call tracking, and session management.  PHP's only job is to:
+ *   1. Verify Nextcloud authentication (handled by the framework)
+ *   2. Forward the user's identity via X-Nextcloud-User / X-Nextcloud-Name
+ *   3. Pipe the request/response through without transformation
  */
 class AgentController extends Controller {
     private OpenClawService $openClaw;
@@ -30,87 +36,52 @@ class AgentController extends Controller {
     }
 
     /**
-     * Build a user-scoped session identifier to prevent cross-user data leakage.
+     * Get the current Nextcloud user identity headers.
+     * These are sent to Hermes so it can scope everything to the user.
      */
-    private function getScopedSessionId(): string {
+    private function getUserHeaders(): array {
         $user = $this->userSession->getUser();
         $uid = $user ? $user->getUID() : 'anonymous';
-        // Check both conversation_id (new) and session_id (legacy) params
-        $sessionId = $this->request->getParam('conversation_id')
-            ?? $this->request->getParam('session_id', 'main');
-        // Prevent double-prefixing: if the conversation_id already starts with
-        // "uid:" (e.g. "admin:conv-123"), return it as-is instead of adding
-        // another prefix which would create "admin:admin:conv-123".
-        $prefix = $uid . ':';
-        if (str_starts_with($sessionId, $prefix)) {
-            return $sessionId;
-        }
-        return $prefix . $sessionId;
-    }
-
-    /**
-     * Sanitize a client-supplied messages array: only allow 'user' and 'assistant'
-     * roles and strip anything else (e.g. 'system') to prevent prompt injection.
-     */
-    private function sanitizeMessages(array $messages): array {
-        $allowed = ['user', 'assistant'];
-        $clean = [];
-        foreach ($messages as $msg) {
-            if (!is_array($msg) || !isset($msg['role'], $msg['content'])) {
-                continue;
-            }
-            if (!in_array($msg['role'], $allowed, true)) {
-                continue;
-            }
-            $clean[] = [
-                'role' => $msg['role'],
-                'content' => (string) $msg['content'],
-            ];
-        }
-        return $clean;
+        $name = $user ? ($user->getDisplayName() ?: $uid) : 'Anonymous';
+        return [
+            'X-Nextcloud-User' => $uid,
+            'X-Nextcloud-Name' => $name,
+        ];
     }
 
     /**
      * @NoAdminRequired
      */
     public function health(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/health'));
+        return new JSONResponse($this->openClaw->get('/health', $this->getUserHeaders()));
     }
 
     /**
      * @NoAdminRequired
      */
     public function healthDetail(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/health/detail'));
+        return new JSONResponse($this->openClaw->get('/health/detail', $this->getUserHeaders()));
     }
 
     /**
      * @NoAdminRequired
      *
-     * Send a message to OpenClaw via OpenAI-compatible Chat Completions endpoint.
+     * Non-streaming chat fallback. Hermes handles user scoping internally.
      */
     public function chat(): JSONResponse {
         $message = $this->request->getParam('message', '');
         $messages = $this->request->getParam('messages', null);
-        $scopedId = $this->getScopedSessionId();
+        $conversationId = $this->request->getParam('conversation_id', 'main');
 
-        // If a full messages array was provided, sanitize and forward for multi-turn context
-        if (is_array($messages) && count($messages) > 0) {
-            $chatMessages = $this->sanitizeMessages($messages);
-        } else {
-            $chatMessages = [
-                ['role' => 'user', 'content' => $message],
-            ];
-        }
+        $chatMessages = (is_array($messages) && count($messages) > 0)
+            ? $this->sanitizeMessages($messages)
+            : [['role' => 'user', 'content' => $message]];
 
-        // Backend uses /api/chat with SSE streaming; for non-SSE we still
-        // call the same endpoint but return whatever we get as JSON.
         $result = $this->openClaw->post('/api/chat', [
             'messages' => $chatMessages,
-            'conversation_id' => $scopedId,
-        ]);
+            'conversation_id' => $conversationId,
+        ], $this->getUserHeaders());
 
-        // Extract the assistant response
         $response = '';
         if (isset($result['choices'][0]['message']['content'])) {
             $response = $result['choices'][0]['message']['content'];
@@ -130,35 +101,12 @@ class AgentController extends Controller {
     /**
      * @NoAdminRequired
      *
-     * Stream a message to OpenClaw via SSE Chat Completions (buffered fallback).
-     */
-    public function chatStream(): DataResponse {
-        $message = $this->request->getParam('message', '');
-        $messages = $this->request->getParam('messages', null);
-        $scopedId = $this->getScopedSessionId();
-
-        $chatMessages = (is_array($messages) && count($messages) > 0)
-            ? $this->sanitizeMessages($messages)
-            : [['role' => 'user', 'content' => $message]];
-
-        $result = $this->openClaw->postStream('/api/chat', [
-            'messages' => $chatMessages,
-            'conversation_id' => $scopedId,
-        ]);
-
-        return new DataResponse(['response' => $result]);
-    }
-
-    /**
-     * @NoAdminRequired
-     *
-     * True SSE passthrough — streams OpenClaw chunks to the client in real-time.
-     * The widget uses this for live activity feed with word-by-word text reveal.
+     * True SSE passthrough — Hermes handles everything, PHP is just a pipe.
      */
     public function chatSSE(): void {
         $message = $this->request->getParam('message', '');
         $messages = $this->request->getParam('messages', null);
-        $scopedId = $this->getScopedSessionId();
+        $conversationId = $this->request->getParam('conversation_id', 'main');
 
         $chatMessages = (is_array($messages) && count($messages) > 0)
             ? $this->sanitizeMessages($messages)
@@ -168,9 +116,6 @@ class AgentController extends Controller {
         while (ob_get_level()) {
             ob_end_clean();
         }
-
-        // Release PHP session lock so other requests from this user are not blocked
-        // during the streaming duration (up to 180s).
         session_write_close();
 
         header('Content-Type: text/event-stream');
@@ -180,10 +125,11 @@ class AgentController extends Controller {
 
         $url = $this->openClaw->getBaseUrl() . '/api/chat';
         $token = $this->openClaw->getApiToken();
+        $userHeaders = $this->getUserHeaders();
 
         $payload = json_encode([
             'messages' => $chatMessages,
-            'conversation_id' => $scopedId,
+            'conversation_id' => $conversationId,
         ]);
 
         $ch = curl_init();
@@ -199,6 +145,8 @@ class AgentController extends Controller {
                 'Content-Type: application/json',
                 'Accept: text/event-stream',
                 $token ? 'Authorization: Bearer ' . $token : null,
+                'X-Nextcloud-User: ' . $userHeaders['X-Nextcloud-User'],
+                'X-Nextcloud-Name: ' . $userHeaders['X-Nextcloud-Name'],
             ]),
             CURLOPT_WRITEFUNCTION => function ($ch, $data) {
                 echo $data;
@@ -221,69 +169,97 @@ class AgentController extends Controller {
 
     /**
      * @NoAdminRequired
+     *
+     * List conversations — Hermes auto-filters by user from X-Nextcloud-User.
      */
     public function getConversations(): JSONResponse {
-        $user = $this->userSession->getUser();
-        $uid = $user ? $user->getUID() : 'anonymous';
-        // Use prefix filter to get all conversations for this user
-        return new JSONResponse($this->openClaw->get('/api/conversations?prefix=' . urlencode($uid . ':')));
+        return new JSONResponse($this->openClaw->get('/api/conversations', $this->getUserHeaders()));
     }
 
     /**
      * @NoAdminRequired
      */
     public function getConversation(string $id): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/conversations/' . urlencode($id)));
+        return new JSONResponse($this->openClaw->get('/api/conversations/' . urlencode($id), $this->getUserHeaders()));
     }
 
     /**
      * @NoAdminRequired
      */
     public function getConversationToolCalls(string $id): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/conversations/' . urlencode($id) . '/toolcalls'));
+        return new JSONResponse($this->openClaw->get('/api/conversations/' . urlencode($id) . '/toolcalls', $this->getUserHeaders()));
     }
 
     /**
      * @NoAdminRequired
+     *
+     * Recent tool calls — Hermes auto-filters by user from X-Nextcloud-User.
      */
     public function getRecentToolCalls(): JSONResponse {
-        $user = $this->userSession->getUser();
-        $uid = $user ? $user->getUID() : 'anonymous';
-        return new JSONResponse($this->openClaw->get('/api/toolcalls/recent?prefix=' . urlencode($uid . ':') . '&limit=20'));
+        return new JSONResponse($this->openClaw->get('/api/toolcalls/recent', $this->getUserHeaders()));
     }
 
     /**
      * @NoAdminRequired
      */
     public function deleteConversation(string $id): JSONResponse {
-        return new JSONResponse($this->openClaw->delete('/api/conversations/' . urlencode($id)));
+        return new JSONResponse($this->openClaw->delete('/api/conversations/' . urlencode($id), $this->getUserHeaders()));
+    }
+
+    /**
+     * @NoAdminRequired
+     */
+    public function reconnect(): JSONResponse {
+        return new JSONResponse($this->openClaw->post('/api/reconnect', [], $this->getUserHeaders()));
     }
 
     /**
      * @NoAdminRequired
      */
     public function getSkills(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/v1/skills'));
+        return new JSONResponse($this->openClaw->get('/api/v1/skills', $this->getUserHeaders()));
     }
 
     /**
      * @NoAdminRequired
      */
     public function getModels(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/v1/models'));
+        return new JSONResponse($this->openClaw->get('/api/v1/models', $this->getUserHeaders()));
     }
 
     /**
-     * Admin only — returns OpenClaw config which may contain sensitive data.
+     * Admin only — returns config which may contain sensitive data.
      */
     public function getConfig(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/v1/config'));
+        return new JSONResponse($this->openClaw->get('/api/v1/config', $this->getUserHeaders()));
     }
 
     /**
-     * Admin only — returns OpenClaw session data.
+     * Admin only — returns session data.
      */
     public function getSessions(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/v1/sessions'));
+        return new JSONResponse($this->openClaw->get('/api/v1/sessions', $this->getUserHeaders()));
+    }
+
+    /**
+     * Sanitize a client-supplied messages array: only allow 'user' and 'assistant'
+     * roles and strip anything else to prevent prompt injection.
+     */
+    private function sanitizeMessages(array $messages): array {
+        $allowed = ['user', 'assistant'];
+        $clean = [];
+        foreach ($messages as $msg) {
+            if (!is_array($msg) || !isset($msg['role'], $msg['content'])) {
+                continue;
+            }
+            if (!in_array($msg['role'], $allowed, true)) {
+                continue;
+            }
+            $clean[] = [
+                'role' => $msg['role'],
+                'content' => (string) $msg['content'],
+            ];
+        }
+        return $clean;
     }
 }
