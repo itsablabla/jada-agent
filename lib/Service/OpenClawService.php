@@ -8,14 +8,15 @@ use OCP\IConfig;
 use Psr\Log\LoggerInterface;
 
 /**
- * HTTP client for communicating with the Hermes backend.
+ * HTTP client for communicating with the LibreChat backend.
  *
- * This is a thin transport layer — all business logic lives in Hermes.
- * Extra headers (like X-Nextcloud-User) are forwarded to every request
- * so Hermes can scope operations to the authenticated user.
+ * This is a thin transport layer — all business logic lives in LibreChat.
+ * LibreChat provides native MCP support (118 Nextcloud tools), multi-model
+ * switching, and built-in context compression via its OpenAI-compatible API.
  */
 class OpenClawService {
-    private const DEFAULT_URL = 'http://localhost:18789';
+    private const DEFAULT_URL = 'http://LibreChat:3080';
+    private const DEFAULT_API_PATH = '/api/agents/v1';
 
     private IConfig $config;
     private LoggerInterface $logger;
@@ -34,6 +35,13 @@ class OpenClawService {
 
     public function getApiToken(): string {
         return $this->config->getAppValue('jadaagent', 'openclaw_token', '');
+    }
+
+    /**
+     * Get the LibreChat OpenAI-compatible API base path.
+     */
+    public function getApiPath(): string {
+        return self::DEFAULT_API_PATH;
     }
 
     /**
@@ -115,7 +123,7 @@ class OpenClawService {
         curl_close($ch);
 
         if ($response === false) {
-            $this->logger->error('Hermes request failed', [
+            $this->logger->error('LibreChat request failed', [
                 'url' => $url,
                 'method' => $method,
                 'error' => $error,
@@ -129,7 +137,7 @@ class OpenClawService {
         }
 
         if ($decoded === null) {
-            return ['error' => 'Invalid response from Hermes', 'raw' => substr($response, 0, 500), 'status' => $httpCode];
+            return ['error' => 'Invalid response from backend', 'raw' => substr($response, 0, 500), 'status' => $httpCode];
         }
 
         if (is_array($decoded) && !array_is_list($decoded)) {

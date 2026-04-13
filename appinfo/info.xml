@@ -4,31 +4,31 @@
     <id>jadaagent</id>
     <name>Jada Agent</name>
     <namespace>JadaAgent</namespace>
-    <summary>AI Agent powered by Hermes — autonomous tasks, workspaces, MCP tools, and Telegram bot</summary>
+    <summary>AI Agent powered by LibreChat — native MCP tools, multi-model, workspaces, and Nextcloud integration</summary>
     <description><![CDATA[
-**Jada Agent** brings autonomous AI agent capabilities to your Nextcloud, powered by [Hermes](https://github.com/itsablabla/jada-agent) — the GARZA OS super agent backend.
+**Jada Agent** brings AI agent capabilities to your Nextcloud, powered by [LibreChat](https://github.com/danny-avila/LibreChat) — a production-grade chat platform with native MCP support.
 
 ### Features
 
 - **Workspaces** — Organize conversations by project (Kuse, Nomad Internet, GARZA OS, etc.)
 - **Chat** — Full-page AI chat with SSE streaming and inline tool-call visualization
-- **MCP Tools** — 406+ tools across 6 servers (Nextcloud, Composio, Kuse, Vault, ProtonMail, Rube)
-- **Telegram Bot** — Same agent, same conversation memory, native Telegram formatting
-- **Document Editor** — AI-assisted document editing with inline suggestions
+- **Native MCP** — 118 Nextcloud tools (files, calendar, notes, deck, contacts) via LibreChat's built-in MCP client
+- **Multi-Model** — Switch between Gemini, Claude, GPT, and more per conversation
+- **Agent Framework** — No-code agent builder with per-agent MCP server + prompt configuration
 - **Per-User Isolation** — Each Nextcloud user gets isolated chat history and workspaces
 
 ### Architecture
 
-- **Hermes Backend** — Native Hermes Agent with built-in context compression (Docker, port 3200)
-- **Telegram Bot** — Separate container sharing Hermes conversation memory
+- **LibreChat Backend** — OpenAI-compatible API with native MCP, agent framework, and context management (Docker, port 3080)
 - **Nextcloud App** — Vue.js 3 frontend + PHP proxy controllers
+- **MCP Server** — Nextcloud MCP server providing 118 tools via Streamable HTTP
 
 ### Requirements
 
-- Hermes backend (bundled Docker Compose in `backend/`)
-- OpenRouter API key (or any OpenAI-compatible provider)
+- LibreChat backend (Docker Compose)
+- Gemini, OpenRouter, or other LLM API key
     ]]></description>
-    <version>0.3.6</version>
+    <version>0.4.0</version>
     <licence>AGPL-3.0-or-later</licence>
     <author mail="garzasecure@pm.me">Garza OS</author>
     <category>integration</category>

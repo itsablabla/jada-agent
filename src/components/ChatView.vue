@@ -178,7 +178,7 @@ export default {
 			const conversationId = store.activeConversationId
 
 			try {
-				// Build full message history for Hermes Agent (OpenAI format)
+				// Build full message history (OpenAI format for LibreChat)
 				const allMessages = this.messages.map(m => ({
 					role: m.role,
 					content: m.content,
@@ -219,7 +219,7 @@ export default {
 						try {
 							const parsed = JSON.parse(data)
 
-							// Hermes tool progress events
+							// Legacy Hermes tool progress events (kept for backward compat)
 							if (currentEvent === 'hermes.tool.progress' && parsed.tool) {
 								const toolName = parsed.tool
 								toolCalls.push({ name: toolName, status: 'running', result: null })
@@ -230,8 +230,26 @@ export default {
 							}
 							currentEvent = ''
 
-							// OpenAI chat completions streaming format (Hermes Agent)
+							// OpenAI chat completions streaming format
 							const delta = parsed.choices?.[0]?.delta
+
+							// LibreChat/OpenAI standard: tool calls via delta.tool_calls
+							if (delta?.tool_calls) {
+								for (const tc of delta.tool_calls) {
+									const rawName = tc.function?.name
+									if (!rawName) continue
+									// Strip _mcp_serverName suffix for display
+									const displayName = rawName.replace(/_mcp_.+$/, '')
+									// Avoid duplicates if the same tool_call streams across chunks
+									const callId = tc.id || rawName
+									if (!toolCalls.find(t => t.callId === callId)) {
+										toolCalls.push({ name: displayName, callId, status: 'running', result: null })
+										actions.addToolCall({ name: displayName, status: 'running', timestamp: new Date() })
+									}
+								}
+								this.streamingToolCalls = [...toolCalls]
+							}
+
 							if (delta?.content) {
 								fullText += delta.content
 								this.streamingText = fullText
