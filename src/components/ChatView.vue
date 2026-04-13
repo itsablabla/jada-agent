@@ -39,7 +39,7 @@
 					<!-- Text content -->
 					<div class="jada-msg-text" v-html="formatMessage(msg.content)"></div>
 					<div class="jada-msg-meta">
-						{{ formatTime(msg.timestamp) }}
+						{{ formatTime(msg.timestamp || msg.createdAt) }}
 						<span v-if="msg.toolCalls && msg.toolCalls.length"> &middot; {{ msg.toolCalls.length }} tool call{{ msg.toolCalls.length > 1 ? 's' : '' }}</span>
 					</div>
 				</div>
@@ -112,10 +112,10 @@ export default {
 			suggestions: [
 				'List my Nextcloud files',
 				'Check my calendar',
-				'Show my Proton Drive stats',
-				'List my Beeper chats',
+				'Show my contacts',
 				'What tools do you have?',
 				'Check system status',
+				'Search my documents',
 			],
 		}
 	},
@@ -134,25 +134,38 @@ export default {
 		},
 	},
 	watch: {
-		'store.activeConversationId'() {
-			// Don't reload while actively sending — startNewChat() triggers this
-			// watcher mid-send, and loadFromLocalStorage() would wipe the
-			// just-added user message for brand-new conversations.
+		'store.activeConversationId'(newId) {
 			if (!this.loading) {
-				this.loadConversation()
+				if (newId) {
+					this.loadServerMessages(newId)
+				} else {
+					this.messages = []
+				}
 			}
 		},
 	},
 	mounted() {
 		if (store.activeConversationId) {
-			this.loadConversation()
+			this.loadServerMessages(store.activeConversationId)
 		}
 	},
 	methods: {
-		loadConversation() {
-			if (!store.activeConversationId) return
-			// Load from localStorage (Hermes Agent doesn't serve conversation history)
-			this.loadFromLocalStorage(store.activeConversationId)
+		async loadServerMessages(conversationId) {
+			if (!conversationId) return
+			this.messages = []
+			try {
+				const serverMessages = await api.getConversationMessages(conversationId)
+				if (Array.isArray(serverMessages)) {
+					this.messages = serverMessages.map(m => ({
+						role: m.isCreatedByUser ? 'user' : 'assistant',
+						content: typeof m.text === 'string' ? m.text : (m.content || ''),
+						timestamp: m.createdAt,
+						messageId: m.messageId,
+					}))
+				}
+			} catch (e) {
+				console.error('Failed to load messages from server:', e)
+			}
 		},
 
 		async handleSend(text) {
@@ -163,27 +176,22 @@ export default {
 			this.messages.push({
 				role: 'user',
 				content: message,
-				timestamp: new Date(),
+				timestamp: new Date().toISOString(),
 			})
 			this.scrollToBottom()
 			this.loading = true
 			this.streamingText = ''
 			this.streamingToolCalls = []
 
-			if (!store.activeConversationId) {
-				actions.startNewChat()
-			}
-			// Capture conversation ID now — the user may switch conversations
-			// during streaming, and we must persist under the original ID.
-			const conversationId = store.activeConversationId
+			// For new conversations, don't set an ID yet — LibreChat will create one
+			const conversationId = store.activeConversationId || null
 
 			try {
-				// Build full message history (OpenAI format for LibreChat)
 				const allMessages = this.messages.map(m => ({
 					role: m.role,
 					content: m.content,
 				}))
-				const { promise, cancel } = api.createSSEStream(allMessages)
+				const { promise, cancel } = api.createSSEStream(allMessages, conversationId)
 				this.currentCancel = cancel
 
 				const response = await promise
@@ -196,6 +204,7 @@ export default {
 				let buffer = ''
 				let fullText = ''
 				const toolCalls = []
+				let newConversationId = null
 
 				let currentEvent = ''
 				while (true) {
@@ -207,7 +216,6 @@ export default {
 					buffer = lines.pop() || ''
 
 					for (const line of lines) {
-						// Track SSE event type (Hermes sends "event: hermes.tool.progress")
 						if (line.startsWith('event: ')) {
 							currentEvent = line.slice(7).trim()
 							continue
@@ -219,7 +227,12 @@ export default {
 						try {
 							const parsed = JSON.parse(data)
 
-							// Legacy Hermes tool progress events (kept for backward compat)
+							// Extract conversation ID from response if present
+							if (parsed.conversationId && !newConversationId) {
+								newConversationId = parsed.conversationId
+							}
+
+							// Legacy Hermes tool progress events
 							if (currentEvent === 'hermes.tool.progress' && parsed.tool) {
 								const toolName = parsed.tool
 								toolCalls.push({ name: toolName, status: 'running', result: null })
@@ -233,14 +246,11 @@ export default {
 							// OpenAI chat completions streaming format
 							const delta = parsed.choices?.[0]?.delta
 
-							// LibreChat/OpenAI standard: tool calls via delta.tool_calls
 							if (delta?.tool_calls) {
 								for (const tc of delta.tool_calls) {
 									const rawName = tc.function?.name
 									if (!rawName) continue
-									// Strip _mcp_serverName suffix for display
 									const displayName = rawName.replace(/_mcp_.+$/, '')
-									// Avoid duplicates if the same tool_call streams across chunks
 									const callId = tc.id || rawName
 									if (!toolCalls.find(t => t.callId === callId)) {
 										toolCalls.push({ name: displayName, callId, status: 'running', result: null })
@@ -254,20 +264,17 @@ export default {
 								fullText += delta.content
 								this.streamingText = fullText
 							}
-							// Check for finish_reason to mark tools as complete
-							// (outside delta check — final chunk may lack delta field)
+
 							if (parsed.choices?.[0]?.finish_reason === 'stop') {
 								toolCalls.forEach(tc => {
 									if (tc.status === 'running') tc.status = 'success'
 								})
 								this.streamingToolCalls = [...toolCalls]
-								// Also update right panel store entries
 								store.recentToolCalls.forEach(tc => {
 									if (tc.status === 'running') tc.status = 'success'
 								})
 							}
 						} catch {
-							// Ignore unparseable lines
 							currentEvent = ''
 						}
 					}
@@ -278,69 +285,55 @@ export default {
 				this.messages.push({
 					role: 'assistant',
 					content: fullText || this.streamingText || '(No response)',
-					timestamp: new Date(),
+					timestamp: new Date().toISOString(),
 					toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
 				})
-				// Save conversation to localStorage AFTER assistant message is added
-				this.saveToLocalStorage(conversationId)
-			} catch (err) {
-				if (err.name === 'AbortError') {
-					this.saveToLocalStorage(conversationId)
-					return
+
+				// If LibreChat created a new conversation, track it
+				if (newConversationId) {
+					store.activeConversationId = newConversationId
 				}
-				// Fallback to non-streaming — send full history for context
+			} catch (err) {
+				if (err.name === 'AbortError') return
 				try {
 					const allMessages = this.messages.map(m => ({ role: m.role, content: m.content }))
 					const result = await api.sendMessage(allMessages, conversationId)
 					this.messages.push({
 						role: 'assistant',
 						content: result.response || result.message || JSON.stringify(result),
-						timestamp: new Date(),
+						timestamp: new Date().toISOString(),
 					})
 				} catch (fallbackErr) {
 					this.messages.push({
 						role: 'assistant',
 						content: 'Error: ' + (fallbackErr.response?.data?.error || fallbackErr.message || 'Failed to reach agent'),
-						timestamp: new Date(),
+						timestamp: new Date().toISOString(),
 					})
 				}
-				// Save conversation in error/fallback paths too
-				this.saveToLocalStorage(conversationId)
 			} finally {
 				this.loading = false
 				this.streamingText = ''
 				this.streamingToolCalls = []
 				this.currentCancel = null
 				this.scrollToBottom()
-				// Refresh conversation list in sidebar
+				// Refresh conversation list from server
 				actions.loadConversations()
-				// Note: do NOT call loadRecentToolCalls() here — it fetches from
-				// the backend which returns an empty stub, wiping in-memory
-				// tool calls accumulated during streaming.
 			}
 		},
 
 		formatMessage(text) {
 			if (!text) return ''
-			// Escape HTML
 			let html = text
 				.replace(/&/g, '&amp;')
 				.replace(/</g, '&lt;')
 				.replace(/>/g, '&gt;')
-			// Markdown: code blocks (``` ... ```)
 			html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-			// Markdown: inline code
 			html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
-			// Markdown: bold
 			html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-			// Markdown: italic (single * or _)
 			html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
-			// Markdown: headings (## or ###)
 			html = html.replace(/^### (.+)$/gm, '<strong style="font-size:13px">$1</strong>')
 			html = html.replace(/^## (.+)$/gm, '<strong style="font-size:14px">$1</strong>')
-			// Markdown: unordered list items
 			html = html.replace(/^- (.+)$/gm, '&bull; $1')
-			// Newlines
 			html = html.replace(/\n/g, '<br>')
 			return html
 		},
@@ -363,76 +356,6 @@ export default {
 			el.style.height = 'auto'
 			el.style.height = Math.min(el.scrollHeight, 120) + 'px'
 		},
-
-		/** Get user-scoped localStorage key prefix to prevent cross-user data leaks */
-		storagePrefix() {
-			const uid = store.userProfile?.uid || window.OC?.currentUser || 'default'
-			return `jada_${uid}`
-		},
-
-		/** Save current conversation to localStorage for persistence across reloads */
-		saveToLocalStorage(conversationId) {
-			const convId = conversationId || store.activeConversationId
-			if (!convId) return
-			try {
-				const prefix = this.storagePrefix()
-				const convKey = `${prefix}_conv_${convId}`
-				const data = {
-					id: convId,
-					messages: this.messages,
-					updatedAt: new Date().toISOString(),
-					title: this.messages.find(m => m.role === 'user')?.content?.slice(0, 60) || 'New Chat',
-				}
-				localStorage.setItem(convKey, JSON.stringify(data))
-
-				// Update conversation list index
-				const indexKey = `${prefix}_conversations`
-				const index = JSON.parse(localStorage.getItem(indexKey) || '[]')
-				const existing = index.findIndex(c => c.id === data.id)
-				const entry = { id: data.id, title: data.title, updatedAt: data.updatedAt, workspace: store.activeWorkspaceId }
-				if (existing >= 0) {
-					index[existing] = entry
-				} else {
-					index.unshift(entry)
-				}
-				// Keep last 50 conversations, clean up orphaned data
-				if (index.length > 50) {
-					const removed = index.splice(50)
-					removed.forEach(c => {
-						try { localStorage.removeItem(`${prefix}_conv_${c.id}`) } catch {}
-					})
-				}
-				localStorage.setItem(indexKey, JSON.stringify(index))
-
-				// Update store sidebar
-				store.conversations = index
-			} catch {
-				// localStorage full or unavailable — ignore
-			}
-		},
-
-		/** Load conversation from localStorage */
-		loadFromLocalStorage(conversationId) {
-			const prefix = this.storagePrefix()
-			// Always clear messages first — the watcher's if(!this.loading) guard
-			// already prevents this from running during handleSend(), so clearing
-			// is safe here and necessary for "+ New Chat" to start fresh.
-			this.messages = []
-			try {
-				// Try user-scoped key first, fall back to legacy unscoped key
-				const raw = localStorage.getItem(`${prefix}_conv_${conversationId}`)
-					|| localStorage.getItem(`jada_conv_${conversationId}`)
-				const data = raw ? JSON.parse(raw) : null
-				if (data?.messages) {
-					this.messages = data.messages.map(m => ({
-						...m,
-						timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
-					}))
-				}
-			} catch {
-				// Corrupt data — ignore
-			}
-		},
 	},
 
 	beforeUnmount() {
@@ -447,6 +370,7 @@ export default {
 	flex-direction: column;
 	height: 100%;
 	min-height: 0;
+	overflow: hidden;
 }
 
 /* ─── Empty state ─── */
@@ -661,7 +585,9 @@ export default {
 /* ─── Input area ─── */
 .jada-chat-input-area {
 	padding: 12px 24px 16px;
+	padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
 	border-top: 1px solid rgba(255,255,255,0.06);
+	flex-shrink: 0;
 }
 
 .jada-chat-input-row {
@@ -729,5 +655,16 @@ export default {
 	padding: 6px 4px 0;
 	font-size: 11px;
 	color: #444;
+}
+
+/* ─── Mobile ─── */
+@media (max-width: 768px) {
+	.jada-chat-input-area {
+		padding: 8px 12px 12px;
+		padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+	}
+	.jada-chat-messages {
+		padding: 12px 12px;
+	}
 }
 </style>

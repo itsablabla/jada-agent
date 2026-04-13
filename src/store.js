@@ -3,20 +3,23 @@ import api from './api.js'
 
 /**
  * Global reactive store for workspace state, conversations, and user profile.
- * Shared across all components via provide/inject or direct import.
+ * Conversations are now persisted server-side via LibreChat's API.
  */
 export const store = reactive({
-	// Current view: 'chat' | 'workspaces' | 'workspace-detail' | 'document-editor' | 'tool-explorer' | 'search' | 'settings' | 'profile'
+	// Current view
 	currentView: 'chat',
 
 	// Workspace state
 	workspaces: [],
 	activeWorkspaceId: 'nextcloud',
 
-	// Conversation state
+	// Conversation state (server-side via LibreChat)
 	conversations: [],
 	activeConversationId: null,
 	messages: [],
+	conversationsCursor: null,
+	hasMoreConversations: false,
+	conversationsLoading: false,
 
 	// Health & tools
 	healthy: false,
@@ -25,6 +28,23 @@ export const store = reactive({
 	totalTools: 0,
 	modelName: '',
 	recentToolCalls: [],
+
+	// Tags (server-side via LibreChat)
+	tags: [],
+
+	// Search
+	searchResults: [],
+	searchLoading: false,
+
+	// Sharing
+	sharedLinks: [],
+
+	// Memories
+	memories: [],
+	memoryStats: { totalTokens: 0, charLimit: 10000 },
+
+	// Presets
+	presets: [],
 
 	// User
 	userProfile: null,
@@ -134,20 +154,15 @@ export const actions = {
 			store.workspaces = DEFAULT_WORKSPACES
 		}
 
-		// Always ensure Nextcloud root workspace exists
 		if (!store.workspaces.find(w => w.id === 'nextcloud')) {
 			store.workspaces.unshift(DEFAULT_WORKSPACES[0])
 		}
 
-		// Load health
 		await this.refreshHealth()
 
-		// Load user profile BEFORE conversations — loadConversations() uses
-		// store.userProfile.uid to build the localStorage key prefix.
 		try {
 			store.userProfile = await api.getUserProfile()
 		} catch {
-			// Profile endpoint may not exist yet — use Nextcloud user info
 			store.userProfile = {
 				uid: window.OC?.currentUser || 'default',
 				displayName: window.OC?.getCurrentUser?.()?.displayName || 'User',
@@ -155,23 +170,19 @@ export const actions = {
 			}
 		}
 
-		// Load conversations for active workspace (after userProfile so key prefix is correct)
+		// Load conversations from LibreChat server
 		await this.loadConversations()
 
-		// Note: loadRecentToolCalls() removed — backend now returns empty stub
-		// since conversation state moved to localStorage. Tool calls are
-		// accumulated in-memory during streaming via addToolCall().
+		// Load tags
+		await this.loadTags()
 	},
 
 	async refreshHealth() {
 		try {
 			const data = await api.getHealth()
-			// Hermes Agent returns model list from /v1/models via PHP proxy
-			// Accept any non-error response as healthy
 			store.healthy = data?.ok === true
 			store.healthData = data
 
-			// Extract MCP server info if available
 			const servers = data?.mcpServers || data?.servers
 			if (servers && typeof servers === 'object') {
 				store.mcpServers = Object.entries(servers).map(([name, info]) => ({
@@ -195,31 +206,288 @@ export const actions = {
 		}
 	},
 
-	async loadConversations() {
-		// Load conversation list from localStorage (Hermes Agent manages sessions internally)
-		// Use user-scoped key to prevent cross-user data leaks on shared origins
+	// ─── Server-side conversations ───────────────────────────────────────
+
+	async loadConversations(append = false) {
+		if (store.conversationsLoading) return
+		store.conversationsLoading = true
+
+		try {
+			const params = { limit: 25 }
+			if (append && store.conversationsCursor) {
+				params.cursor = store.conversationsCursor
+			}
+
+			const result = await api.getConversations(params)
+			const convos = (result?.conversations || []).map(c => ({
+				id: c.conversationId || c._id,
+				title: c.title || 'New Conversation',
+				updatedAt: c.updatedAt || c.createdAt,
+				createdAt: c.createdAt,
+				endpoint: c.endpoint,
+				model: c.model,
+				tags: c.tags || [],
+				isArchived: c.isArchived || false,
+			}))
+
+			if (append) {
+				store.conversations.push(...convos)
+			} else {
+				store.conversations = convos
+			}
+
+			store.conversationsCursor = result?.nextCursor || null
+			store.hasMoreConversations = !!result?.nextCursor
+		} catch (e) {
+			console.error('Failed to load conversations from server:', e)
+			// Fallback to localStorage for backward compat during migration
+			this.loadConversationsFromLocalStorage()
+		} finally {
+			store.conversationsLoading = false
+		}
+	},
+
+	loadConversationsFromLocalStorage() {
 		const uid = store.userProfile?.uid || window.OC?.currentUser || 'default'
 		const scopedKey = `jada_${uid}_conversations`
 		try {
-			let index = JSON.parse(localStorage.getItem(scopedKey) || '[]')
-			// Migrate legacy unscoped data on first load
-			if (index.length === 0) {
-				const legacy = JSON.parse(localStorage.getItem('jada_conversations') || '[]')
-				if (legacy.length > 0) {
-					index = legacy
-					localStorage.setItem(scopedKey, JSON.stringify(index))
-				}
-			}
-			store.conversations = index
+			store.conversations = JSON.parse(localStorage.getItem(scopedKey) || '[]')
 		} catch {
 			store.conversations = []
 		}
 	},
 
+	async loadConversationMessages(conversationId) {
+		if (!conversationId) return
+		try {
+			const messages = await api.getConversationMessages(conversationId)
+			if (Array.isArray(messages)) {
+				store.messages = messages.map(m => ({
+					role: m.isCreatedByUser ? 'user' : 'assistant',
+					content: typeof m.text === 'string' ? m.text : (m.content || ''),
+					messageId: m.messageId,
+					parentMessageId: m.parentMessageId,
+					createdAt: m.createdAt,
+					sender: m.sender,
+				}))
+			} else {
+				store.messages = []
+			}
+		} catch (e) {
+			console.error('Failed to load messages:', e)
+			store.messages = []
+		}
+	},
+
+	async selectConversation(conversationId) {
+		store.activeConversationId = conversationId
+		store.messages = []
+		store.recentToolCalls = []
+		await this.loadConversationMessages(conversationId)
+		store.currentView = 'chat'
+	},
+
+	async deleteConversation(conversationId) {
+		try {
+			await api.deleteConversation(conversationId)
+			store.conversations = store.conversations.filter(c => c.id !== conversationId)
+			if (store.activeConversationId === conversationId) {
+				store.activeConversationId = null
+				store.messages = []
+			}
+		} catch (e) {
+			console.error('Failed to delete conversation:', e)
+		}
+	},
+
+	async updateConversationTitle(conversationId, title) {
+		try {
+			await api.updateConversation(conversationId, title)
+			const conv = store.conversations.find(c => c.id === conversationId)
+			if (conv) conv.title = title
+		} catch (e) {
+			console.error('Failed to update conversation title:', e)
+		}
+	},
+
+	async archiveConversation(conversationId) {
+		try {
+			await api.archiveConversation(conversationId, true)
+			store.conversations = store.conversations.filter(c => c.id !== conversationId)
+			if (store.activeConversationId === conversationId) {
+				store.activeConversationId = null
+				store.messages = []
+			}
+		} catch (e) {
+			console.error('Failed to archive conversation:', e)
+		}
+	},
+
+	async generateTitle(conversationId) {
+		try {
+			const result = await api.genTitle(conversationId)
+			if (result?.title) {
+				const conv = store.conversations.find(c => c.id === conversationId)
+				if (conv) conv.title = result.title
+			}
+			return result
+		} catch (e) {
+			console.error('Failed to generate title:', e)
+		}
+	},
+
+	// ─── Tags ────────────────────────────────────────────────────────────
+
+	async loadTags() {
+		try {
+			const tags = await api.getTags()
+			store.tags = Array.isArray(tags) ? tags : []
+		} catch {
+			store.tags = []
+		}
+	},
+
+	async tagConversation(conversationId, tag) {
+		try {
+			await api.addTag(conversationId, tag)
+			const conv = store.conversations.find(c => c.id === conversationId)
+			if (conv && !conv.tags.includes(tag)) conv.tags.push(tag)
+			await this.loadTags()
+		} catch (e) {
+			console.error('Failed to tag conversation:', e)
+		}
+	},
+
+	async untagConversation(conversationId, tag) {
+		try {
+			await api.removeTag(conversationId, tag)
+			const conv = store.conversations.find(c => c.id === conversationId)
+			if (conv) conv.tags = conv.tags.filter(t => t !== tag)
+			await this.loadTags()
+		} catch (e) {
+			console.error('Failed to untag conversation:', e)
+		}
+	},
+
+	// ─── Search ──────────────────────────────────────────────────────────
+
+	async searchMessages(query) {
+		if (!query || query.trim().length < 2) {
+			store.searchResults = []
+			return
+		}
+		store.searchLoading = true
+		try {
+			const result = await api.search(query)
+			store.searchResults = (result?.messages || []).map(m => ({
+				messageId: m.messageId,
+				conversationId: m.conversationId,
+				text: m.text || m.content || '',
+				sender: m.sender,
+				isCreatedByUser: m.isCreatedByUser,
+				createdAt: m.createdAt,
+			}))
+		} catch (e) {
+			console.error('Search failed:', e)
+			store.searchResults = []
+		} finally {
+			store.searchLoading = false
+		}
+	},
+
+	// ─── Sharing ─────────────────────────────────────────────────────────
+
+	async loadSharedLinks() {
+		try {
+			const result = await api.getSharedLinks()
+			store.sharedLinks = result?.links || []
+		} catch {
+			store.sharedLinks = []
+		}
+	},
+
+	async shareConversation(conversationId) {
+		try {
+			const result = await api.createShareLink(conversationId)
+			await this.loadSharedLinks()
+			return result
+		} catch (e) {
+			console.error('Failed to share conversation:', e)
+		}
+	},
+
+	async deleteShareLink(id) {
+		try {
+			await api.deleteShareLink(id)
+			store.sharedLinks = store.sharedLinks.filter(l => l._id !== id)
+		} catch (e) {
+			console.error('Failed to delete share link:', e)
+		}
+	},
+
+	// ─── Memories ────────────────────────────────────────────────────────
+
+	async loadMemories() {
+		try {
+			const result = await api.getMemories()
+			store.memories = result?.memories || []
+			store.memoryStats = {
+				totalTokens: result?.totalTokens || 0,
+				charLimit: result?.charLimit || 10000,
+				usagePercentage: result?.usagePercentage || null,
+			}
+		} catch {
+			store.memories = []
+		}
+	},
+
+	async deleteMemory(id) {
+		try {
+			await api.deleteMemory(id)
+			store.memories = store.memories.filter(m => m._id !== id)
+		} catch (e) {
+			console.error('Failed to delete memory:', e)
+		}
+	},
+
+	// ─── Presets ─────────────────────────────────────────────────────────
+
+	async loadPresets() {
+		try {
+			const result = await api.getPresets()
+			store.presets = Array.isArray(result) ? result : []
+		} catch {
+			store.presets = []
+		}
+	},
+
+	async createPreset(data) {
+		try {
+			const result = await api.createPreset(data)
+			await this.loadPresets()
+			return result
+		} catch (e) {
+			console.error('Failed to create preset:', e)
+		}
+	},
+
+	async deletePreset(id) {
+		try {
+			await api.deletePreset(id)
+			store.presets = store.presets.filter(p => p._id !== id)
+		} catch (e) {
+			console.error('Failed to delete preset:', e)
+		}
+	},
+
+	// ─── Navigation ──────────────────────────────────────────────────────
+
 	setActiveWorkspace(id) {
 		store.activeWorkspaceId = id
 		store.activeConversationId = null
 		store.messages = []
+		// Reload conversations filtered by tag if workspace has a tag mapping
+		this.loadConversations()
 	},
 
 	getActiveWorkspace() {
@@ -227,8 +495,9 @@ export const actions = {
 	},
 
 	startNewChat() {
-		store.activeConversationId = 'conv-' + Date.now()
+		store.activeConversationId = null
 		store.messages = []
+		store.recentToolCalls = []
 		store.currentView = 'chat'
 	},
 
@@ -259,7 +528,7 @@ export const actions = {
 				}))
 			}
 		} catch {
-			// Backend may not support this yet — keep empty
+			// keep empty
 		}
 	},
 }

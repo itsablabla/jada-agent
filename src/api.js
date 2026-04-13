@@ -4,6 +4,8 @@ import { generateUrl } from '@nextcloud/router'
 const baseUrl = generateUrl('/apps/jadaagent')
 
 export default {
+	// ─── Health ──────────────────────────────────────────────────────────
+
 	async getHealth() {
 		const res = await axios.get(`${baseUrl}/api/health`)
 		return res.data
@@ -14,8 +16,9 @@ export default {
 		return res.data
 	},
 
+	// ─── Chat ────────────────────────────────────────────────────────────
+
 	async sendMessage(messages, conversationId = 'main') {
-		// Accept either a full messages array or a single string for backward compat
 		const payload = Array.isArray(messages)
 			? { messages, conversation_id: conversationId }
 			: { message: messages, conversation_id: conversationId }
@@ -26,21 +29,25 @@ export default {
 	/**
 	 * Open an SSE stream to the LibreChat backend (OpenAI-compatible).
 	 * @param {Array} messages - Full conversation history [{role, content}, ...]
+	 * @param {string} [conversationId] - Optional conversation ID for persistence
 	 * @returns {{ promise: Promise<Response>, cancel: Function }}
 	 */
-	createSSEStream(messages) {
+	createSSEStream(messages, conversationId = null) {
 		const url = `${baseUrl}/api/chat/sse`
 		const csrfToken = document.querySelector('meta[name="requesttoken"]')?.content
 			|| window.OC?.requestToken || ''
 
 		const controller = new AbortController()
+		const body = { messages }
+		if (conversationId) body.conversationId = conversationId
+
 		const promise = fetch(url, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
 				'requesttoken': csrfToken,
 			},
-			body: JSON.stringify({ messages }),
+			body: JSON.stringify(body),
 			signal: controller.signal,
 		})
 
@@ -50,13 +57,47 @@ export default {
 		}
 	},
 
-	async getConversations() {
-		const res = await axios.get(`${baseUrl}/api/conversations`)
+	// ─── Conversations (server-side via LibreChat) ───────────────────────
+
+	async getConversations(params = {}) {
+		const res = await axios.get(`${baseUrl}/api/conversations`, { params })
 		return res.data
 	},
 
 	async getConversation(id) {
 		const res = await axios.get(`${baseUrl}/api/conversations/${encodeURIComponent(id)}`)
+		return res.data
+	},
+
+	async deleteConversation(id) {
+		const res = await axios.delete(`${baseUrl}/api/conversations/${encodeURIComponent(id)}`)
+		return res.data
+	},
+
+	async updateConversation(conversationId, title) {
+		const res = await axios.post(`${baseUrl}/api/conversations/update`, { conversationId, title })
+		return res.data
+	},
+
+	async archiveConversation(conversationId, isArchived = true) {
+		const res = await axios.post(`${baseUrl}/api/conversations/archive`, { conversationId, isArchived })
+		return res.data
+	},
+
+	async genTitle(conversationId) {
+		const res = await axios.get(`${baseUrl}/api/conversations/${encodeURIComponent(conversationId)}/gen-title`)
+		return res.data
+	},
+
+	// ─── Messages (server-side via LibreChat) ────────────────────────────
+
+	async getMessages(params = {}) {
+		const res = await axios.get(`${baseUrl}/api/messages`, { params })
+		return res.data
+	},
+
+	async getConversationMessages(conversationId) {
+		const res = await axios.get(`${baseUrl}/api/messages/${encodeURIComponent(conversationId)}`)
 		return res.data
 	},
 
@@ -70,17 +111,100 @@ export default {
 		return res.data
 	},
 
-	async deleteConversation(id) {
-		const res = await axios.delete(`${baseUrl}/api/conversations/${encodeURIComponent(id)}`)
+	// ─── Search ──────────────────────────────────────────────────────────
+
+	async search(query, params = {}) {
+		const res = await axios.get(`${baseUrl}/api/search`, { params: { q: query, ...params } })
 		return res.data
 	},
+
+	// ─── Tags ────────────────────────────────────────────────────────────
+
+	async getTags() {
+		const res = await axios.get(`${baseUrl}/api/tags`)
+		return res.data
+	},
+
+	async addTag(conversationId, tag) {
+		const res = await axios.post(`${baseUrl}/api/tags`, { conversationId, tag })
+		return res.data
+	},
+
+	async removeTag(conversationId, tag) {
+		const res = await axios.delete(`${baseUrl}/api/tags`, { data: { conversationId, tag } })
+		return res.data
+	},
+
+	// ─── Sharing ─────────────────────────────────────────────────────────
+
+	async getSharedLinks() {
+		const res = await axios.get(`${baseUrl}/api/share`)
+		return res.data
+	},
+
+	async createShareLink(conversationId) {
+		const res = await axios.post(`${baseUrl}/api/share`, { conversationId })
+		return res.data
+	},
+
+	async deleteShareLink(id) {
+		const res = await axios.delete(`${baseUrl}/api/share/${encodeURIComponent(id)}`)
+		return res.data
+	},
+
+	// ─── Memories ────────────────────────────────────────────────────────
+
+	async getMemories() {
+		const res = await axios.get(`${baseUrl}/api/memories`)
+		return res.data
+	},
+
+	async deleteMemory(id) {
+		const res = await axios.delete(`${baseUrl}/api/memories/${encodeURIComponent(id)}`)
+		return res.data
+	},
+
+	// ─── Presets ─────────────────────────────────────────────────────────
+
+	async getPresets() {
+		const res = await axios.get(`${baseUrl}/api/presets`)
+		return res.data
+	},
+
+	async createPreset(data) {
+		const res = await axios.post(`${baseUrl}/api/presets`, data)
+		return res.data
+	},
+
+	async deletePreset(id) {
+		const res = await axios.delete(`${baseUrl}/api/presets/${encodeURIComponent(id)}`)
+		return res.data
+	},
+
+	// ─── MCP / Legacy ────────────────────────────────────────────────────
 
 	async reconnectMcp(server = null) {
 		const res = await axios.post(`${baseUrl}/api/reconnect`, server ? { server } : {})
 		return res.data
 	},
 
-	// Workspace API
+	async getSkills() {
+		const res = await axios.get(`${baseUrl}/api/skills`)
+		return res.data
+	},
+
+	async getModels() {
+		const res = await axios.get(`${baseUrl}/api/models`)
+		return res.data
+	},
+
+	async getSessions() {
+		const res = await axios.get(`${baseUrl}/api/sessions`)
+		return res.data
+	},
+
+	// ─── Workspaces ──────────────────────────────────────────────────────
+
 	async getWorkspaces() {
 		const res = await axios.get(`${baseUrl}/api/workspaces`)
 		return res.data
@@ -106,24 +230,10 @@ export default {
 		return res.data
 	},
 
-	// User profile
+	// ─── User ────────────────────────────────────────────────────────────
+
 	async getUserProfile() {
 		const res = await axios.get(`${baseUrl}/api/profile`)
-		return res.data
-	},
-
-	async getSkills() {
-		const res = await axios.get(`${baseUrl}/api/skills`)
-		return res.data
-	},
-
-	async getModels() {
-		const res = await axios.get(`${baseUrl}/api/models`)
-		return res.data
-	},
-
-	async getSessions() {
-		const res = await axios.get(`${baseUrl}/api/sessions`)
 		return res.data
 	},
 

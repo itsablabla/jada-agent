@@ -8,42 +8,54 @@
 			<input
 				v-model="query"
 				class="jada-search-input"
-				placeholder="Search conversations, tools, files..."
+				placeholder="Search conversations, messages, tools..."
 				@input="handleSearch"
 				ref="searchInput"
 			/>
+			<div v-if="store.searchLoading" class="jada-search-spinner"></div>
 		</div>
 
 		<div v-if="query.trim()" class="jada-search-results">
-			<div class="jada-search-result-count">{{ results.length }} results for "{{ query }}"</div>
+			<div class="jada-search-result-count">
+				{{ totalResults }} results for "{{ query }}"
+				<span v-if="serverResults.length"> ({{ serverResults.length }} from server)</span>
+			</div>
 
-			<div v-for="(r, i) in results" :key="i" class="jada-search-result" @click="openResult(r)">
-				<span :class="['jada-search-type', r.type]">{{ r.type }}</span>
+			<!-- Server-side search results (MeiliSearch full-text) -->
+			<div v-for="(r, i) in serverResults" :key="'s-'+i" class="jada-search-result" @click="openMessageResult(r)">
+				<span class="jada-search-type message">message</span>
 				<div class="jada-search-result-info">
-					<div class="jada-search-result-title">{{ r.title }}</div>
-					<div class="jada-search-result-preview" v-html="r.preview"></div>
+					<div class="jada-search-result-title">{{ r.sender || (r.isCreatedByUser ? 'You' : 'Jada') }}</div>
+					<div class="jada-search-result-preview">{{ truncate(r.text, 120) }}</div>
+					<div class="jada-search-result-meta">{{ formatDate(r.createdAt) }}</div>
 				</div>
 			</div>
 
-			<div v-if="!results.length" class="jada-search-empty">
+			<!-- Local results (conversations, tools, workspaces) -->
+			<div v-for="(r, i) in localResults" :key="'l-'+i" class="jada-search-result" @click="openResult(r)">
+				<span :class="['jada-search-type', r.type]">{{ r.type }}</span>
+				<div class="jada-search-result-info">
+					<div class="jada-search-result-title">{{ r.title }}</div>
+					<div class="jada-search-result-preview">{{ r.preview }}</div>
+				</div>
+			</div>
+
+			<div v-if="!totalResults && !store.searchLoading" class="jada-search-empty">
 				No results found. Try a different search term.
 			</div>
 		</div>
 
 		<div v-else class="jada-search-empty-state">
-			<p>Search across your conversations, tool calls, and files.</p>
-			<div class="jada-search-recent">
-				<div class="jada-search-recent-label">Recent Searches</div>
-				<div v-for="term in recentSearches" :key="term" class="jada-search-recent-item" @click="query = term; handleSearch()">
-					&#128269; {{ term }}
-				</div>
-			</div>
+			<p>Full-text search across all conversations and messages.</p>
+			<p class="jada-search-hint">Powered by MeiliSearch — searches message content server-side.</p>
 		</div>
 	</div>
 </template>
 
 <script>
-import { store } from '../store.js'
+import { store, actions } from '../store.js'
+
+let searchTimeout = null
 
 export default {
 	name: 'SearchView',
@@ -51,37 +63,54 @@ export default {
 		return {
 			store,
 			query: '',
-			results: [],
-			recentSearches: ['nextcloud files', 'calendar events', 'kuse documents'],
+			localResults: [],
 		}
+	},
+	computed: {
+		serverResults() {
+			return store.searchResults || []
+		},
+		totalResults() {
+			return this.serverResults.length + this.localResults.length
+		},
 	},
 	mounted() {
 		this.$nextTick(() => this.$refs.searchInput?.focus())
 	},
 	methods: {
 		handleSearch() {
-			const q = this.query.toLowerCase().trim()
-			if (!q) {
-				this.results = []
+			const q = this.query.trim()
+			if (!q || q.length < 2) {
+				this.localResults = []
+				store.searchResults = []
 				return
 			}
 
+			// Local search (instant)
+			this.searchLocal(q.toLowerCase())
+
+			// Server-side search (debounced)
+			clearTimeout(searchTimeout)
+			searchTimeout = setTimeout(() => {
+				actions.searchMessages(q)
+			}, 300)
+		},
+
+		searchLocal(q) {
 			const results = []
 
-			// Search conversations
 			for (const conv of store.conversations) {
 				const title = conv.title || conv.id || ''
 				if (title.toLowerCase().includes(q)) {
 					results.push({
 						type: 'chat',
 						title: title,
-						preview: conv.lastMessage || 'Conversation',
+						preview: 'Conversation',
 						data: conv,
 					})
 				}
 			}
 
-			// Search tool calls
 			for (const tc of store.recentToolCalls) {
 				if (tc.name.toLowerCase().includes(q)) {
 					results.push({
@@ -93,7 +122,6 @@ export default {
 				}
 			}
 
-			// Search workspaces
 			for (const ws of store.workspaces) {
 				if (ws.name.toLowerCase().includes(q) || (ws.description || '').toLowerCase().includes(q)) {
 					results.push({
@@ -105,18 +133,34 @@ export default {
 				}
 			}
 
-			this.results = results
+			this.localResults = results
 		},
+
+		openMessageResult(msg) {
+			if (msg.conversationId) {
+				actions.selectConversation(msg.conversationId)
+			}
+		},
+
 		openResult(r) {
 			if (r.type === 'chat') {
-				store.activeConversationId = r.data.id
-				store.currentView = 'chat'
+				actions.selectConversation(r.data.id)
 			} else if (r.type === 'workspace') {
 				store.activeWorkspaceId = r.data.id
 				store.currentView = 'workspace-detail'
 			} else if (r.type === 'tool') {
 				store.currentView = 'tool-explorer'
 			}
+		},
+
+		truncate(text, len) {
+			if (!text) return ''
+			return text.length > len ? text.slice(0, len) + '...' : text
+		},
+
+		formatDate(d) {
+			if (!d) return ''
+			return new Date(d).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 		},
 	},
 }
@@ -163,6 +207,19 @@ export default {
 
 .jada-search-input::placeholder { color: #444; }
 
+.jada-search-spinner {
+	width: 16px;
+	height: 16px;
+	border: 2px solid rgba(233, 69, 96, 0.3);
+	border-top-color: #e94560;
+	border-radius: 50%;
+	animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+	to { transform: rotate(360deg); }
+}
+
 .jada-search-result-count {
 	font-size: 12px;
 	color: #555;
@@ -195,6 +252,7 @@ export default {
 .jada-search-type.chat { background: rgba(233, 69, 96, 0.15); color: #e94560; }
 .jada-search-type.tool { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
 .jada-search-type.workspace { background: rgba(139, 92, 246, 0.15); color: #8b5cf6; }
+.jada-search-type.message { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
 .jada-search-type.document { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
 
 .jada-search-result-title {
@@ -209,6 +267,12 @@ export default {
 	color: #555;
 }
 
+.jada-search-result-meta {
+	font-size: 11px;
+	color: #444;
+	margin-top: 2px;
+}
+
 .jada-search-empty {
 	text-align: center;
 	padding: 32px;
@@ -221,31 +285,9 @@ export default {
 	color: #555;
 }
 
-.jada-search-recent {
-	margin-top: 24px;
-	text-align: left;
-}
-
-.jada-search-recent-label {
-	font-size: 11px;
-	font-weight: 700;
+.jada-search-hint {
+	font-size: 12px;
 	color: #444;
-	text-transform: uppercase;
-	letter-spacing: 0.5px;
-	margin-bottom: 8px;
-}
-
-.jada-search-recent-item {
-	padding: 8px 12px;
-	border-radius: 8px;
-	font-size: 13px;
-	color: #8b8b9e;
-	cursor: pointer;
-	transition: background 0.15s;
-}
-
-.jada-search-recent-item:hover {
-	background: rgba(255,255,255,0.04);
-	color: #e8e8ef;
+	margin-top: 8px;
 }
 </style>
