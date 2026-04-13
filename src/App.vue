@@ -66,18 +66,24 @@
 
 			<!-- Conversation list (only in chat view) -->
 			<div v-if="store.currentView === 'chat'" class="jada-conv-list">
-				<div class="jada-conv-section-label">Today</div>
-				<div
-					v-for="conv in filteredConversations"
-					:key="conv.id"
-					:class="['jada-conv-item', { active: conv.id === store.activeConversationId }]"
-					@click="openConversation(conv)"
-				>
-					<span class="jada-conv-icon">&#128172;</span>
-					<div class="jada-conv-info">
-						<div class="jada-conv-title">{{ conv.title || conv.id }}</div>
-						<div class="jada-conv-preview">{{ conv.lastMessage || '' }}</div>
+				<div v-if="store.conversationsLoading && !store.conversations.length" class="jada-conv-loading">Loading...</div>
+				<div v-for="(group, label) in groupedConversations" :key="label">
+					<div class="jada-conv-section-label">{{ label }}</div>
+					<div
+						v-for="conv in group"
+						:key="conv.id"
+						:class="['jada-conv-item', { active: conv.id === store.activeConversationId }]"
+						@click="openConversation(conv)"
+					>
+						<span class="jada-conv-icon">{{ conv.isArchived ? '&#128451;' : '&#128172;' }}</span>
+						<div class="jada-conv-info">
+							<div class="jada-conv-title">{{ conv.title || 'New Conversation' }}</div>
+							<div class="jada-conv-time">{{ formatRelativeTime(conv.updatedAt) }}</div>
+						</div>
 					</div>
+				</div>
+				<div v-if="store.hasMoreConversations" class="jada-conv-load-more" @click="actions.loadConversations(true)">
+					Load more...
 				</div>
 			</div>
 
@@ -169,10 +175,25 @@ export default {
 			if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
 			return name.substring(0, 2).toUpperCase()
 		},
-		filteredConversations() {
-			return store.conversations.filter(c =>
-				!store.activeWorkspaceId || c.workspace === store.activeWorkspaceId || !c.workspace
-			).slice(0, 20)
+		groupedConversations() {
+			const now = new Date()
+			const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+			const yesterday = new Date(today - 86400000)
+			const weekAgo = new Date(today - 7 * 86400000)
+
+			const groups = {}
+			for (const conv of store.conversations) {
+				const d = new Date(conv.updatedAt || conv.createdAt)
+				let label
+				if (d >= today) label = 'Today'
+				else if (d >= yesterday) label = 'Yesterday'
+				else if (d >= weekAgo) label = 'This Week'
+				else label = 'Older'
+
+				if (!groups[label]) groups[label] = []
+				groups[label].push(conv)
+			}
+			return groups
 		},
 		viewTitle() {
 			const titles = {
@@ -201,8 +222,21 @@ export default {
 			this.wsDropdownOpen = false
 		},
 		openConversation(conv) {
-			store.activeConversationId = conv.id
-			store.currentView = 'chat'
+			actions.selectConversation(conv.id)
+		},
+		formatRelativeTime(dateStr) {
+			if (!dateStr) return ''
+			const d = new Date(dateStr)
+			const now = new Date()
+			const diffMs = now - d
+			const diffMin = Math.floor(diffMs / 60000)
+			if (diffMin < 1) return 'just now'
+			if (diffMin < 60) return `${diffMin}m ago`
+			const diffHr = Math.floor(diffMin / 60)
+			if (diffHr < 24) return `${diffHr}h ago`
+			const diffDay = Math.floor(diffHr / 24)
+			if (diffDay < 7) return `${diffDay}d ago`
+			return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 		},
 	},
 }
@@ -454,13 +488,32 @@ export default {
 	text-overflow: ellipsis;
 }
 
-.jada-conv-preview {
+.jada-conv-time {
 	font-size: 11px;
 	color: #555;
 	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
 	margin-top: 2px;
+}
+
+.jada-conv-loading {
+	text-align: center;
+	padding: 16px;
+	font-size: 12px;
+	color: #555;
+}
+
+.jada-conv-load-more {
+	text-align: center;
+	padding: 10px;
+	font-size: 12px;
+	color: #e94560;
+	cursor: pointer;
+	border-radius: 8px;
+	transition: background 0.15s;
+}
+
+.jada-conv-load-more:hover {
+	background: rgba(233, 69, 96, 0.1);
 }
 
 /* ─── Sidebar footer ─── */
