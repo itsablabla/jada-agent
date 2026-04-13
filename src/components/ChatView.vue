@@ -352,8 +352,13 @@ export default {
 				} else {
 					index.unshift(entry)
 				}
-				// Keep last 50 conversations
-				if (index.length > 50) index.length = 50
+				// Keep last 50 conversations, clean up orphaned data
+				if (index.length > 50) {
+					const removed = index.splice(50)
+					removed.forEach(c => {
+						try { localStorage.removeItem(`jada_conv_${c.id}`) } catch {}
+					})
+				}
 				localStorage.setItem(indexKey, JSON.stringify(index))
 
 				// Update store sidebar

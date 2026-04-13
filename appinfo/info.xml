@@ -28,7 +28,7 @@
 - Hermes backend (bundled Docker Compose in `backend/`)
 - OpenRouter API key (or any OpenAI-compatible provider)
     ]]></description>
-    <version>0.3.0</version>
+    <version>0.3.1</version>
     <licence>AGPL-3.0-or-later</licence>
     <author mail="garzasecure@pm.me">Garza OS</author>
     <category>integration</category>
