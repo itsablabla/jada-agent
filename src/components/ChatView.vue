@@ -109,6 +109,7 @@ export default {
 			streamingText: '',
 			streamingToolCalls: [],
 			currentCancel: null,
+			skipNextWatcherLoad: false,
 			suggestions: [
 				'List my Nextcloud files',
 				'Check my calendar',
@@ -135,6 +136,10 @@ export default {
 	},
 	watch: {
 		'store.activeConversationId'(newId) {
+			if (this.skipNextWatcherLoad) {
+				this.skipNextWatcherLoad = false
+				return
+			}
 			if (!this.loading) {
 				if (newId) {
 					this.loadServerMessages(newId)
@@ -291,6 +296,7 @@ export default {
 
 				// If LibreChat created a new conversation, track it
 				if (newConversationId) {
+					this.skipNextWatcherLoad = true
 					store.activeConversationId = newConversationId
 				}
 			} catch (err) {

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace OCA\JadaAgent\Service;
 
 use OCP\IConfig;
+use OCP\Security\ICredentialsManager;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -24,11 +25,13 @@ class OpenClawService {
     private const DEFAULT_SERVICE_EMAIL = 'jada@nextcloud.local';
 
     private IConfig $config;
+    private ICredentialsManager $credentials;
     private LoggerInterface $logger;
     private ?string $jwtCache = null;
 
-    public function __construct(IConfig $config, LoggerInterface $logger) {
+    public function __construct(IConfig $config, ICredentialsManager $credentials, LoggerInterface $logger) {
         $this->config = $config;
+        $this->credentials = $credentials;
         $this->logger = $logger;
     }
 
@@ -146,7 +149,18 @@ class OpenClawService {
      */
     private function loginForJwt(): string {
         $email = $this->config->getAppValue('jadaagent', 'librechat_service_email', self::DEFAULT_SERVICE_EMAIL);
-        $password = $this->config->getAppValue('jadaagent', 'librechat_service_password', '');
+        $password = $this->credentials->retrieve('', 'jadaagent/librechat_service_password');
+        if ($password === null || $password === '') {
+            // Fallback: migrate from plaintext appconfig if present
+            $legacy = $this->config->getAppValue('jadaagent', 'librechat_service_password', '');
+            if ($legacy !== '') {
+                $password = $legacy;
+                // Migrate to secure storage and remove plaintext
+                $this->credentials->store('', 'jadaagent/librechat_service_password', $legacy);
+                $this->config->deleteAppValue('jadaagent', 'librechat_service_password');
+            }
+        }
+        $password = (string) $password;
         if ($password === '') {
             $this->logger->error('LibreChat service password not configured — set it in Jada Agent admin settings');
             return '';
