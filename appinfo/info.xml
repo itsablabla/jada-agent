@@ -19,7 +19,7 @@
 
 ### Architecture
 
-- **Hermes Backend** — Node.js MCP hub + agent loop (Docker container, port 3200)
+- **Hermes Backend** — Native Hermes Agent with built-in context compression (Docker, port 3200)
 - **Telegram Bot** — Separate container sharing Hermes conversation memory
 - **Nextcloud App** — Vue.js 3 frontend + PHP proxy controllers
 
@@ -28,7 +28,7 @@
 - Hermes backend (bundled Docker Compose in `backend/`)
 - OpenRouter API key (or any OpenAI-compatible provider)
     ]]></description>
-    <version>0.2.3</version>
+    <version>0.3.4</version>
     <licence>AGPL-3.0-or-later</licence>
     <author mail="garzasecure@pm.me">Garza OS</author>
     <category>integration</category>

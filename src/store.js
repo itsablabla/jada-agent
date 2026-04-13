@@ -141,33 +141,36 @@ export const actions = {
 		// Load health
 		await this.refreshHealth()
 
-		// Load conversations for active workspace
-		await this.loadConversations()
-
-		// Load recent tool calls from backend (persisted across reloads)
-		await this.loadRecentToolCalls()
-
-		// Load user profile
+		// Load user profile BEFORE conversations — loadConversations() uses
+		// store.userProfile.uid to build the localStorage key prefix.
 		try {
 			store.userProfile = await api.getUserProfile()
 		} catch {
 			// Profile endpoint may not exist yet — use Nextcloud user info
 			store.userProfile = {
-				uid: window.OC?.currentUser || 'admin',
+				uid: window.OC?.currentUser || 'default',
 				displayName: window.OC?.getCurrentUser?.()?.displayName || 'User',
 				email: '',
 			}
 		}
+
+		// Load conversations for active workspace (after userProfile so key prefix is correct)
+		await this.loadConversations()
+
+		// Note: loadRecentToolCalls() removed — backend now returns empty stub
+		// since conversation state moved to localStorage. Tool calls are
+		// accumulated in-memory during streaming via addToolCall().
 	},
 
 	async refreshHealth() {
 		try {
 			const data = await api.getHealth()
-			store.healthy = data?.ok === true || data?.status === 'ok'
+			// Hermes Agent returns model list from /v1/models via PHP proxy
+			// Accept any non-error response as healthy
+			store.healthy = data?.ok === true
 			store.healthData = data
 
-			// Extract MCP server info
-			// Backend returns mcpServers (or servers) with {status, tools} per server
+			// Extract MCP server info if available
 			const servers = data?.mcpServers || data?.servers
 			if (servers && typeof servers === 'object') {
 				store.mcpServers = Object.entries(servers).map(([name, info]) => ({
@@ -188,13 +191,21 @@ export const actions = {
 	},
 
 	async loadConversations() {
+		// Load conversation list from localStorage (Hermes Agent manages sessions internally)
+		// Use user-scoped key to prevent cross-user data leaks on shared origins
+		const uid = store.userProfile?.uid || window.OC?.currentUser || 'default'
+		const scopedKey = `jada_${uid}_conversations`
 		try {
-			const data = await api.getConversations()
-			if (Array.isArray(data)) {
-				store.conversations = data
-			} else if (data?.conversations) {
-				store.conversations = data.conversations
+			let index = JSON.parse(localStorage.getItem(scopedKey) || '[]')
+			// Migrate legacy unscoped data on first load
+			if (index.length === 0) {
+				const legacy = JSON.parse(localStorage.getItem('jada_conversations') || '[]')
+				if (legacy.length > 0) {
+					index = legacy
+					localStorage.setItem(scopedKey, JSON.stringify(index))
+				}
 			}
+			store.conversations = index
 		} catch {
 			store.conversations = []
 		}
