@@ -34,9 +34,6 @@
 								<span class="jada-tool-icon">{{ tc.status === 'success' ? '&#9989;' : '&#128295;' }}</span>
 								<span class="jada-tool-name">{{ tc.name }}</span>
 							</div>
-							<div v-if="tc.result" class="jada-tool-result">
-								<pre>{{ typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2) }}</pre>
-							</div>
 						</div>
 					</div>
 					<!-- Text content -->
@@ -56,11 +53,8 @@
 					<div v-if="streamingToolCalls.length" class="jada-tool-calls">
 						<div v-for="(tc, ti) in streamingToolCalls" :key="ti" class="jada-tool-call">
 							<div class="jada-tool-header">
-								<span class="jada-tool-icon spinning">&#128295;</span>
+								<span :class="['jada-tool-icon', tc.status === 'running' ? 'spinning' : '']">{{ tc.status === 'success' ? '&#9989;' : tc.status === 'error' ? '&#10060;' : '&#128295;' }}</span>
 								<span class="jada-tool-name">{{ tc.name }}</span>
-							</div>
-							<div v-if="tc.result" class="jada-tool-result">
-								<pre>{{ typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2) }}</pre>
 							</div>
 						</div>
 					</div>
@@ -237,7 +231,7 @@ export default {
 								const name = parsed.tool || parsed.name || 'tool'
 								toolCalls.push({ name, status: 'running', result: null })
 								this.streamingToolCalls = [...toolCalls]
-								actions.addToolCall({ name, timestamp: new Date() })
+								actions.addToolCall({ name, status: 'running', timestamp: new Date() })
 							} else if (evtType === 'step_complete') {
 								// Final complete message — use as authoritative text
 								if (parsed.text && !fullText) {
@@ -256,11 +250,21 @@ export default {
 								const match = toolName
 									? [...toolCalls].reverse().find(t => t.name === toolName && t.status === 'running')
 									: toolCalls[toolCalls.length - 1]
+								const resultStatus = parsed.status === 'error' ? 'error' : 'success'
+								const resultText = parsed.result || parsed.output || null
 								if (match) {
-									match.status = parsed.status === 'error' ? 'error' : 'success'
-									match.result = parsed.result || parsed.output || null
+									match.status = resultStatus
+									match.result = resultText
 								}
 								this.streamingToolCalls = [...toolCalls]
+								// Update the right panel tool call status in real-time
+								const panelMatch = toolName
+									? [...store.recentToolCalls].find(t => t.name === toolName && t.status === 'running')
+									: null
+								if (panelMatch) {
+									panelMatch.status = resultStatus
+									panelMatch.result = resultText
+								}
 							} else if (evtType === 'reason_delta') {
 								// Reasoning/thinking — skip (not shown to user)
 							} else if (parsed.choices?.[0]?.delta?.content) {
@@ -314,13 +318,27 @@ export default {
 
 		formatMessage(text) {
 			if (!text) return ''
-			return text
+			// Escape HTML
+			let html = text
 				.replace(/&/g, '&amp;')
 				.replace(/</g, '&lt;')
 				.replace(/>/g, '&gt;')
-				.replace(/\n/g, '<br>')
-				.replace(/`([^`]+)`/g, '<code>$1</code>')
-				.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+			// Markdown: code blocks (``` ... ```)
+			html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+			// Markdown: inline code
+			html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
+			// Markdown: bold
+			html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+			// Markdown: italic (single * or _)
+			html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
+			// Markdown: headings (## or ###)
+			html = html.replace(/^### (.+)$/gm, '<strong style="font-size:13px">$1</strong>')
+			html = html.replace(/^## (.+)$/gm, '<strong style="font-size:14px">$1</strong>')
+			// Markdown: unordered list items
+			html = html.replace(/^- (.+)$/gm, '&bull; $1')
+			// Newlines
+			html = html.replace(/\n/g, '<br>')
+			return html
 		},
 
 		formatTime(date) {
@@ -538,23 +556,6 @@ export default {
 .jada-tool-name {
 	font-family: 'SF Mono', 'Fira Code', monospace;
 	font-size: 12px;
-}
-
-.jada-tool-result {
-	padding: 6px 10px;
-	border-top: 1px solid rgba(255,255,255,0.04);
-	background: rgba(0,0,0,0.15);
-}
-
-.jada-tool-result pre {
-	margin: 0;
-	font-size: 11px;
-	color: #8b8b9e;
-	white-space: pre-wrap;
-	word-break: break-all;
-	max-height: 120px;
-	overflow-y: auto;
-	font-family: 'SF Mono', 'Fira Code', monospace;
 }
 
 /* ─── Typing indicator ─── */

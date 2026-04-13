@@ -338,21 +338,16 @@ app.post("/api/chat", async (req, res) => {
         safeWrite(`event: reason_delta\ndata: ${JSON.stringify({ text })}\n\n`);
       },
       onToolCall: (name, args) => {
-        const toolMsg = `\n\n🔧 *Calling tool:* \`${name}\`\n`;
-        fullText += toolMsg;
-        safeWrite(`event: step_delta\ndata: ${JSON.stringify({ text: toolMsg })}\n\n`);
-        // Emit structured tool_start event for frontend tracking
+        // Only emit structured event — do NOT pollute fullText with tool markup.
+        // The frontend uses tool_start events to render tool call UI components.
         safeWrite(`event: tool_start\ndata: ${JSON.stringify({ tool: name, args: args || {} })}\n\n`);
         // Persist tool call start
         addToolCall(convId, name, 'running', null);
       },
       onToolResult: (name, result) => {
-        const statusEmoji = result.isError ? "❌" : "✅";
-        const preview = result.content?.slice(0, 150) || "done";
-        const toolMsg = `${statusEmoji} *Tool result:* ${preview}\n\n`;
-        fullText += toolMsg;
-        safeWrite(`event: step_delta\ndata: ${JSON.stringify({ text: toolMsg })}\n\n`);
-        // Emit structured tool_result event for frontend tracking
+        const preview = result.content?.slice(0, 200) || "done";
+        // Only emit structured event — do NOT pollute fullText with raw JSON.
+        // The frontend uses tool_result events to update tool call UI components.
         safeWrite(`event: tool_result\ndata: ${JSON.stringify({ tool: name, status: result.isError ? 'error' : 'success', result: preview })}\n\n`);
         // Update persisted tool call with result
         const conv = getConversation(convId);
