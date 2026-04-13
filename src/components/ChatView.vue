@@ -224,18 +224,17 @@ export default {
 
 							// OpenAI chat completions streaming format (Hermes Agent)
 							const delta = parsed.choices?.[0]?.delta
-							if (delta) {
-								if (delta.content) {
-									fullText += delta.content
-									this.streamingText = fullText
-								}
-								// Check for finish_reason to mark tools as complete
-								if (parsed.choices?.[0]?.finish_reason === 'stop') {
-									toolCalls.forEach(tc => {
-										if (tc.status === 'running') tc.status = 'success'
-									})
-									this.streamingToolCalls = [...toolCalls]
-								}
+							if (delta?.content) {
+								fullText += delta.content
+								this.streamingText = fullText
+							}
+							// Check for finish_reason to mark tools as complete
+							// (outside delta check — final chunk may lack delta field)
+							if (parsed.choices?.[0]?.finish_reason === 'stop') {
+								toolCalls.forEach(tc => {
+									if (tc.status === 'running') tc.status = 'success'
+								})
+								this.streamingToolCalls = [...toolCalls]
 							}
 						} catch {
 							// Ignore unparseable lines
@@ -279,9 +278,11 @@ export default {
 				this.streamingToolCalls = []
 				this.currentCancel = null
 				this.scrollToBottom()
-				// Refresh conversation list + tool calls in sidebar
+				// Refresh conversation list in sidebar
 				actions.loadConversations()
-				actions.loadRecentToolCalls()
+				// Note: do NOT call loadRecentToolCalls() here — it fetches from
+				// the backend which returns an empty stub, wiping in-memory
+				// tool calls accumulated during streaming.
 			}
 		},
 

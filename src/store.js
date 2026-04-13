@@ -144,8 +144,9 @@ export const actions = {
 		// Load conversations for active workspace
 		await this.loadConversations()
 
-		// Load recent tool calls from backend (persisted across reloads)
-		await this.loadRecentToolCalls()
+		// Note: loadRecentToolCalls() removed — backend now returns empty stub
+		// since conversation state moved to localStorage. Tool calls are
+		// accumulated in-memory during streaming via addToolCall().
 
 		// Load user profile
 		try {
