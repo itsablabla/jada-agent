@@ -163,11 +163,12 @@ export const actions = {
 	async refreshHealth() {
 		try {
 			const data = await api.getHealth()
-			store.healthy = data?.ok === true || data?.status === 'ok'
+			// Hermes Agent returns model list from /v1/models via PHP proxy
+			// Accept any non-error response as healthy
+			store.healthy = !data?.error
 			store.healthData = data
 
-			// Extract MCP server info
-			// Backend returns mcpServers (or servers) with {status, tools} per server
+			// Extract MCP server info if available
 			const servers = data?.mcpServers || data?.servers
 			if (servers && typeof servers === 'object') {
 				store.mcpServers = Object.entries(servers).map(([name, info]) => ({
@@ -188,13 +189,10 @@ export const actions = {
 	},
 
 	async loadConversations() {
+		// Load conversation list from localStorage (Hermes Agent manages sessions internally)
 		try {
-			const data = await api.getConversations()
-			if (Array.isArray(data)) {
-				store.conversations = data
-			} else if (data?.conversations) {
-				store.conversations = data.conversations
-			}
+			const index = JSON.parse(localStorage.getItem('jada_conversations') || '[]')
+			store.conversations = index
 		} catch {
 			store.conversations = []
 		}

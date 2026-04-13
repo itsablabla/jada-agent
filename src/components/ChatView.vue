@@ -144,25 +144,10 @@ export default {
 		}
 	},
 	methods: {
-		async loadConversation() {
+		loadConversation() {
 			if (!store.activeConversationId) return
-			try {
-				const data = await api.getConversation(store.activeConversationId)
-				if (data?.messages) {
-					this.messages = data.messages
-				}
-				// Load persisted tool calls for this conversation into the right panel
-				if (data?.toolCalls && Array.isArray(data.toolCalls) && data.toolCalls.length) {
-					store.recentToolCalls = data.toolCalls.map(tc => ({
-						name: tc.name,
-						status: tc.status || 'success',
-						result: tc.result || null,
-						timestamp: tc.timestamp ? new Date(tc.timestamp) : new Date(),
-					}))
-				}
-			} catch {
-				// New conversation, no messages yet
-			}
+			// Load from localStorage (Hermes Agent doesn't serve conversation history)
+			this.loadFromLocalStorage(store.activeConversationId)
 		},
 
 		async handleSend(text) {
@@ -185,7 +170,12 @@ export default {
 			}
 
 			try {
-				const { promise, cancel } = api.createSSEStream(message, store.activeConversationId)
+				// Build full message history for Hermes Agent (OpenAI format)
+				const allMessages = this.messages.map(m => ({
+					role: m.role,
+					content: m.content,
+				}))
+				const { promise, cancel } = api.createSSEStream(allMessages)
 				this.currentCancel = cancel
 
 				const response = await promise
@@ -199,6 +189,7 @@ export default {
 				let fullText = ''
 				const toolCalls = []
 
+				let currentEvent = ''
 				while (true) {
 					const { done, value } = await reader.read()
 					if (done) break
@@ -207,9 +198,8 @@ export default {
 					const lines = buffer.split('\n')
 					buffer = lines.pop() || ''
 
-					let currentEvent = ''
 					for (const line of lines) {
-						// Track the SSE event type (e.g. "event: step_delta")
+						// Track SSE event type (Hermes sends "event: hermes.tool.progress")
 						if (line.startsWith('event: ')) {
 							currentEvent = line.slice(7).trim()
 							continue
@@ -220,71 +210,42 @@ export default {
 
 						try {
 							const parsed = JSON.parse(data)
-							// Use event type from "event:" line, fall back to parsed.type
-							const evtType = currentEvent || parsed.type || ''
 
-							if (evtType === 'step_delta' || evtType === 'text_delta' || evtType === 'content_delta') {
-								// Actual assistant response text
-								fullText += parsed.delta || parsed.text || ''
-								this.streamingText = fullText
-							} else if (evtType === 'tool_start' || evtType === 'tool_call') {
-								const name = parsed.tool || parsed.name || 'tool'
-								const callId = parsed.callId != null ? parsed.callId : null
-								toolCalls.push({ name, status: 'running', result: null, callId })
+							// Hermes tool progress events
+							if (currentEvent === 'hermes.tool.progress' && parsed.tool) {
+								const toolName = parsed.tool
+								toolCalls.push({ name: toolName, status: 'running', result: null })
 								this.streamingToolCalls = [...toolCalls]
-								actions.addToolCall({ name, status: 'running', callId, timestamp: new Date() })
-							} else if (evtType === 'step_complete') {
-								// Final complete message — use as authoritative text
-								if (parsed.text && !fullText) {
-									fullText = parsed.text
+								actions.addToolCall({ name: toolName, status: 'running', timestamp: new Date() })
+								currentEvent = ''
+								continue
+							}
+							currentEvent = ''
+
+							// OpenAI chat completions streaming format (Hermes Agent)
+							const delta = parsed.choices?.[0]?.delta
+							if (delta) {
+								if (delta.content) {
+									fullText += delta.content
 									this.streamingText = fullText
 								}
-								const last = toolCalls[toolCalls.length - 1]
-								if (last && last.status === 'running') {
-									last.status = 'success'
-									last.result = parsed.result || parsed.output || null
+								// Check for finish_reason to mark tools as complete
+								if (parsed.choices?.[0]?.finish_reason === 'stop') {
+									toolCalls.forEach(tc => {
+										if (tc.status === 'running') tc.status = 'success'
+									})
+									this.streamingToolCalls = [...toolCalls]
 								}
-								this.streamingToolCalls = [...toolCalls]
-							} else if (evtType === 'tool_result') {
-								// Match by unique callId (preferred) or fall back to name+status
-								const toolName = parsed.tool || parsed.name
-								const callId = parsed.callId != null ? parsed.callId : null
-								const match = callId != null
-									? toolCalls.find(t => t.callId === callId)
-									: (toolName
-										? [...toolCalls].reverse().find(t => t.name === toolName && t.status === 'running')
-										: toolCalls[toolCalls.length - 1])
-								const resultStatus = parsed.status === 'error' ? 'error' : 'success'
-								const resultText = parsed.result || parsed.output || null
-								if (match) {
-									match.status = resultStatus
-									match.result = resultText
-								}
-								this.streamingToolCalls = [...toolCalls]
-								// Update the right panel tool call status in real-time
-								const panelMatch = callId != null
-									? store.recentToolCalls.find(t => t.callId === callId)
-									: (toolName
-										? store.recentToolCalls.find(t => t.name === toolName && t.status === 'running')
-										: null)
-								if (panelMatch) {
-									panelMatch.status = resultStatus
-									panelMatch.result = resultText
-								}
-							} else if (evtType === 'reason_delta') {
-								// Reasoning/thinking — skip (not shown to user)
-							} else if (parsed.choices?.[0]?.delta?.content) {
-								// OpenAI format fallback
-								fullText += parsed.choices[0].delta.content
-								this.streamingText = fullText
 							}
 						} catch {
 							// Ignore unparseable lines
 						}
-						currentEvent = ''
 					}
 					this.scrollToBottom()
 				}
+
+				// Save conversation to localStorage for persistence
+				this.saveToLocalStorage()
 
 				// Finalize message
 				this.messages.push({
@@ -364,6 +325,55 @@ export default {
 			if (!el) return
 			el.style.height = 'auto'
 			el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+		},
+
+		/** Save current conversation to localStorage for persistence across reloads */
+		saveToLocalStorage() {
+			if (!store.activeConversationId) return
+			try {
+				const convKey = `jada_conv_${store.activeConversationId}`
+				const data = {
+					id: store.activeConversationId,
+					messages: this.messages,
+					updatedAt: new Date().toISOString(),
+					title: this.messages.find(m => m.role === 'user')?.content?.slice(0, 60) || 'New Chat',
+				}
+				localStorage.setItem(convKey, JSON.stringify(data))
+
+				// Update conversation list index
+				const indexKey = 'jada_conversations'
+				const index = JSON.parse(localStorage.getItem(indexKey) || '[]')
+				const existing = index.findIndex(c => c.id === data.id)
+				const entry = { id: data.id, title: data.title, updatedAt: data.updatedAt }
+				if (existing >= 0) {
+					index[existing] = entry
+				} else {
+					index.unshift(entry)
+				}
+				// Keep last 50 conversations
+				if (index.length > 50) index.length = 50
+				localStorage.setItem(indexKey, JSON.stringify(index))
+
+				// Update store sidebar
+				store.conversations = index
+			} catch {
+				// localStorage full or unavailable — ignore
+			}
+		},
+
+		/** Load conversation from localStorage */
+		loadFromLocalStorage(conversationId) {
+			try {
+				const data = JSON.parse(localStorage.getItem(`jada_conv_${conversationId}`) || 'null')
+				if (data?.messages) {
+					this.messages = data.messages.map(m => ({
+						...m,
+						timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+					}))
+				}
+			} catch {
+				// Corrupt data — ignore
+			}
 		},
 	},
 

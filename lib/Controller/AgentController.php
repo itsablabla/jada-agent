@@ -51,35 +51,44 @@ class AgentController extends Controller {
 
     /**
      * @NoAdminRequired
+     *
+     * Health check — queries Hermes Agent /v1/models to verify it's alive.
      */
     public function health(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/health', $this->getUserHeaders()));
+        $result = $this->openClaw->get('/v1/models', $this->getUserHeaders());
+        $models = $result['data'] ?? [];
+        return new JSONResponse([
+            'ok' => !isset($result['error']),
+            'status' => isset($result['error']) ? 'error' : 'ok',
+            'engine' => 'hermes-agent',
+            'models' => count($models),
+        ]);
     }
 
     /**
      * @NoAdminRequired
      */
     public function healthDetail(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/health/detail', $this->getUserHeaders()));
+        return $this->health();
     }
 
     /**
      * @NoAdminRequired
      *
-     * Non-streaming chat fallback. Hermes handles user scoping internally.
+     * Non-streaming chat fallback via Hermes Agent OpenAI-compatible API.
      */
     public function chat(): JSONResponse {
         $message = $this->request->getParam('message', '');
         $messages = $this->request->getParam('messages', null);
-        $conversationId = $this->request->getParam('conversation_id', 'main');
 
         $chatMessages = (is_array($messages) && count($messages) > 0)
             ? $this->sanitizeMessages($messages)
             : [['role' => 'user', 'content' => $message]];
 
-        $result = $this->openClaw->post('/api/chat', [
+        $result = $this->openClaw->post('/v1/chat/completions', [
+            'model' => 'hermes-agent',
             'messages' => $chatMessages,
-            'conversation_id' => $conversationId,
+            'stream' => false,
         ], $this->getUserHeaders());
 
         $response = '';
@@ -101,12 +110,12 @@ class AgentController extends Controller {
     /**
      * @NoAdminRequired
      *
-     * True SSE passthrough — Hermes handles everything, PHP is just a pipe.
+     * SSE passthrough to Hermes Agent OpenAI-compatible streaming API.
+     * Hermes handles context management, tool execution, and compression natively.
      */
     public function chatSSE(): void {
         $message = $this->request->getParam('message', '');
         $messages = $this->request->getParam('messages', null);
-        $conversationId = $this->request->getParam('conversation_id', 'main');
 
         $chatMessages = (is_array($messages) && count($messages) > 0)
             ? $this->sanitizeMessages($messages)
@@ -123,13 +132,14 @@ class AgentController extends Controller {
         header('Connection: keep-alive');
         header('X-Accel-Buffering: no');
 
-        $url = $this->openClaw->getBaseUrl() . '/api/chat';
+        $url = $this->openClaw->getBaseUrl() . '/v1/chat/completions';
         $token = $this->openClaw->getApiToken();
         $userHeaders = $this->getUserHeaders();
 
         $payload = json_encode([
+            'model' => 'hermes-agent',
             'messages' => $chatMessages,
-            'conversation_id' => $conversationId,
+            'stream' => true,
         ]);
 
         $ch = curl_init();
@@ -170,47 +180,47 @@ class AgentController extends Controller {
     /**
      * @NoAdminRequired
      *
-     * List conversations — Hermes auto-filters by user from X-Nextcloud-User.
+     * List conversations — served from localStorage on the frontend now.
+     * Returns empty array since Hermes Agent manages sessions internally.
      */
     public function getConversations(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/conversations', $this->getUserHeaders()));
+        return new JSONResponse(['conversations' => []]);
     }
 
     /**
      * @NoAdminRequired
      */
     public function getConversation(string $id): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/conversations/' . urlencode($id), $this->getUserHeaders()));
+        return new JSONResponse(['messages' => [], 'toolCalls' => []]);
     }
 
     /**
      * @NoAdminRequired
      */
     public function getConversationToolCalls(string $id): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/conversations/' . urlencode($id) . '/toolcalls', $this->getUserHeaders()));
+        return new JSONResponse(['toolCalls' => []]);
     }
 
     /**
      * @NoAdminRequired
-     *
-     * Recent tool calls — Hermes auto-filters by user from X-Nextcloud-User.
      */
     public function getRecentToolCalls(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/toolcalls/recent', $this->getUserHeaders()));
+        return new JSONResponse(['toolCalls' => []]);
     }
 
     /**
      * @NoAdminRequired
      */
     public function deleteConversation(string $id): JSONResponse {
-        return new JSONResponse($this->openClaw->delete('/api/conversations/' . urlencode($id), $this->getUserHeaders()));
+        return new JSONResponse(['deleted' => true]);
     }
 
     /**
      * @NoAdminRequired
      */
     public function reconnect(): JSONResponse {
-        return new JSONResponse($this->openClaw->post('/api/reconnect', [], $this->getUserHeaders()));
+        // Hermes Agent handles MCP reconnection internally
+        return new JSONResponse(['status' => 'ok']);
     }
 
     /**

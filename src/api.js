@@ -20,10 +20,11 @@ export default {
 	},
 
 	/**
-	 * Open an SSE stream to the agent backend.
-	 * Returns an object { reader, cancel } for consuming the stream.
+	 * Open an SSE stream to the Hermes Agent backend (OpenAI-compatible).
+	 * @param {Array} messages - Full conversation history [{role, content}, ...]
+	 * @returns {{ promise: Promise<Response>, cancel: Function }}
 	 */
-	createSSEStream(message, conversationId = 'main') {
+	createSSEStream(messages) {
 		const url = `${baseUrl}/api/chat/sse`
 		const csrfToken = document.querySelector('meta[name="requesttoken"]')?.content
 			|| window.OC?.requestToken || ''
@@ -35,7 +36,7 @@ export default {
 				'Content-Type': 'application/json',
 				'requesttoken': csrfToken,
 			},
-			body: JSON.stringify({ message, conversation_id: conversationId }),
+			body: JSON.stringify({ messages }),
 			signal: controller.signal,
 		})
 
