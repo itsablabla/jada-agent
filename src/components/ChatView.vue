@@ -31,7 +31,7 @@
 					<div v-if="msg.toolCalls && msg.toolCalls.length" class="jada-tool-calls">
 						<div v-for="(tc, ti) in msg.toolCalls" :key="ti" class="jada-tool-call">
 							<div class="jada-tool-header">
-								<span class="jada-tool-icon">{{ tc.status === 'error' ? '&#10060;' : tc.status === 'success' ? '&#9989;' : '&#128295;' }}</span>
+								<span class="jada-tool-icon">{{ toolIcon(tc.status) }}</span>
 								<span class="jada-tool-name">{{ tc.name }}</span>
 							</div>
 						</div>
@@ -53,7 +53,7 @@
 					<div v-if="streamingToolCalls.length" class="jada-tool-calls">
 						<div v-for="(tc, ti) in streamingToolCalls" :key="ti" class="jada-tool-call">
 							<div class="jada-tool-header">
-								<span :class="['jada-tool-icon', tc.status === 'running' ? 'spinning' : '']">{{ tc.status === 'error' ? '&#10060;' : tc.status === 'success' ? '&#9989;' : '&#128295;' }}</span>
+								<span :class="['jada-tool-icon', tc.status === 'running' ? 'spinning' : '']">{{ toolIcon(tc.status) }}</span>
 								<span class="jada-tool-name">{{ tc.name }}</span>
 							</div>
 						</div>
@@ -144,6 +144,12 @@ export default {
 		}
 	},
 	methods: {
+		toolIcon(status) {
+			if (status === 'error') return '\u274c'
+			if (status === 'success') return '\u2705'
+			return '\ud83d\udd27'
+		},
+
 		async loadConversation() {
 			if (!store.activeConversationId) return
 			try {
