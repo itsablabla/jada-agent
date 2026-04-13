@@ -173,6 +173,9 @@ export default {
 			if (!store.activeConversationId) {
 				actions.startNewChat()
 			}
+			// Capture conversation ID now — the user may switch conversations
+			// during streaming, and we must persist under the original ID.
+			const conversationId = store.activeConversationId
 
 			try {
 				// Build full message history for Hermes Agent (OpenAI format)
@@ -260,13 +263,13 @@ export default {
 					toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
 				})
 				// Save conversation to localStorage AFTER assistant message is added
-				this.saveToLocalStorage()
+				this.saveToLocalStorage(conversationId)
 			} catch (err) {
 				if (err.name === 'AbortError') return
 				// Fallback to non-streaming — send full history for context
 				try {
 					const allMessages = this.messages.map(m => ({ role: m.role, content: m.content }))
-					const result = await api.sendMessage(allMessages, store.activeConversationId)
+					const result = await api.sendMessage(allMessages, conversationId)
 					this.messages.push({
 						role: 'assistant',
 						content: result.response || result.message || JSON.stringify(result),
@@ -280,7 +283,7 @@ export default {
 					})
 				}
 				// Save conversation in error/fallback paths too
-				this.saveToLocalStorage()
+				this.saveToLocalStorage(conversationId)
 			} finally {
 				this.loading = false
 				this.streamingText = ''
@@ -346,13 +349,14 @@ export default {
 		},
 
 		/** Save current conversation to localStorage for persistence across reloads */
-		saveToLocalStorage() {
-			if (!store.activeConversationId) return
+		saveToLocalStorage(conversationId) {
+			const convId = conversationId || store.activeConversationId
+			if (!convId) return
 			try {
 				const prefix = this.storagePrefix()
-				const convKey = `${prefix}_conv_${store.activeConversationId}`
+				const convKey = `${prefix}_conv_${convId}`
 				const data = {
-					id: store.activeConversationId,
+					id: convId,
 					messages: this.messages,
 					updatedAt: new Date().toISOString(),
 					title: this.messages.find(m => m.role === 'user')?.content?.slice(0, 60) || 'New Chat',
