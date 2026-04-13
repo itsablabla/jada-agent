@@ -213,10 +213,19 @@ export default {
 	display: flex;
 	height: 100%;
 	min-height: calc(100vh - 50px);
+	min-height: calc(100dvh - 50px);
 	background: #0d0d14;
 	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 	color: #e8e8ef;
 	position: relative;
+}
+
+.mobile.jada-app {
+	min-height: calc(100vh - 50px);
+	min-height: calc(100dvh - 50px);
+	max-height: calc(100vh - 50px);
+	max-height: calc(100dvh - 50px);
+	overflow: hidden;
 }
 
 /* ─── Sidebar ─── */
@@ -546,6 +555,7 @@ export default {
 	flex-direction: column;
 	background: #16161f;
 	min-width: 0;
+	min-height: 0;
 }
 
 /* ─── Mobile ─── */

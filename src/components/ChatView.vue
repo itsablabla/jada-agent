@@ -452,6 +452,13 @@ export default {
 	flex: 1;
 	overflow-y: auto;
 	padding: 20px 24px;
+	min-height: 0;
+}
+
+@media (max-width: 768px) {
+	.jada-chat-messages {
+		padding: 12px 12px;
+	}
 }
 
 .jada-msg {
@@ -599,7 +606,16 @@ export default {
 /* ─── Input area ─── */
 .jada-chat-input-area {
 	padding: 12px 24px 16px;
+	padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
 	border-top: 1px solid rgba(255,255,255,0.06);
+	flex-shrink: 0;
+}
+
+@media (max-width: 768px) {
+	.jada-chat-input-area {
+		padding: 8px 12px 12px;
+		padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+	}
 }
 
 .jada-chat-input-row {
