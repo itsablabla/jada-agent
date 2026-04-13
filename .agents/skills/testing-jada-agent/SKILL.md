@@ -1,8 +1,8 @@
-# Testing Jada Agent — Nextcloud App
+# Testing Jada Agent — Nextcloud AI Chat App
 
 ## Overview
 
-Jada Agent is a Nextcloud app that provides a native UI for managing an OpenClaw AI agent. It has 5 views: Dashboard, Chat, Skills & Tools, Schedules, Settings.
+Jada Agent is a Nextcloud app providing a native AI chat interface powered by the Hermes backend (Node.js MCP agent server). It connects to 3 MCP servers with 303+ tools across Nextcloud, Proton-Unified, and Composio.
 
 ## Devin Secrets Needed
 
@@ -12,103 +12,144 @@ Jada Agent is a Nextcloud app that provides a native UI for managing an OpenClaw
 ## Live App URLs
 
 - **App:** `https://next.garzaos.online/apps/jadaagent/`
-- **Admin Settings:** `https://next.garzaos.online/settings/admin/jadaagent`
 - **Admin Account:** Logged in as "Jaden" (admin user)
+- **Backend Health:** `https://next.garzaos.online/apps/jadaagent/api/health`
+
+## Architecture
+
+### Hermes Backend (replaces OpenClaw)
+- Runs as `hermes-backend` Docker container on 83.228.213.100
+- Internal port 3100, external port 3200
+- PHP proxy at `/apps/jadaagent/api/*` forwards to Hermes via curl
+- Hermes owns ALL user scoping, conversation state, and tool call tracking
+- PHP is a thin auth pipe — only forwards `X-Nextcloud-User` header
+
+### MCP Servers (3 servers, 303+ tools)
+- **Composio** (7 tools): Meta-tools for search, execute, bash, connections
+- **Proton-Unified** (178 tools): Mail, drive, iCloud, beeper, fabric + wraps Nextcloud tools via bridge
+- **Nextcloud** (118 tools): Files, calendar, contacts, notes, deck, tables, cookbook, news, collectives
+
+### SSE Streaming
+- Frontend consumes Server-Sent Events with structured event types:
+  - `step_delta` — text chunks from the model
+  - `tool_start` — tool call initiated (shows ⏳ in right panel)
+  - `tool_result` — tool call completed (shows ✅ or ❌)
+  - `step_complete` — model finished generating
+- Tool results are NOT included in chat text — only the model's formatted markdown is stored
 
 ## Key DOM Elements
 
-### Admin Settings Page (`/settings/admin/jadaagent`)
-- `#openclaw-url` — OpenClaw URL input
-- `#openclaw-token` — API Token input
-- `#save-openclaw-settings` — Save button
-- `#openclaw-settings-msg` — Status message span (shows "Saved" in green `#2d8644` or errors in red `#c9302c`)
-
-### In-App Chat
-- Textarea: `placeholder="Message Jada..."`
+### Chat UI
+- Textarea: `placeholder="Message Jada about Nextcloud..."`
 - Send button: enabled when textarea has text AND not loading
-- Typing indicator: 3 bouncing dots with "J" avatar
-- The app uses `XMLHttpRequest` (not `fetch`) for API calls — instrument XHR if counting requests
+- New Chat button: `+ New Chat` at top of sidebar
+- Suggestion buttons: "List my Nextcloud files", "Check my calendar", etc.
+- Status bar: Shows "3 servers · 303 tools" at bottom
 
-### API Endpoints
-- `POST /apps/jadaagent/api/chat` — Send chat message
-- `PUT /apps/jadaagent/api/settings` — Save admin settings
-- `GET /apps/jadaagent/api/status` — Agent status check
-- `POST /apps/jadaagent/api/test-connection` — Test OpenClaw connection
+### Right Panel (Tools/Files/Context tabs)
+- MCP Servers section: Green dots for connected, tool counts per server
+- Recent Tool Calls section: Shows tool name, ✅/❌/⏳ status, timestamp
+- Tool calls persist across page reloads (loaded from `/api/toolcalls/recent`)
+
+### Sidebar (Conversations)
+- Conversations listed under "Today" with title preview
+- Clicking a conversation loads full message history
+- Conversations persist across page reloads (stored in `/data/conversations.json`)
+
+## API Endpoints
+
+- `POST /apps/jadaagent/api/chat` — Send chat message (SSE streaming response)
+- `GET /apps/jadaagent/api/conversations` — List user's conversations
+- `GET /apps/jadaagent/api/conversations/:id` — Get conversation messages
+- `DELETE /apps/jadaagent/api/conversations/:id` — Delete conversation
+- `GET /apps/jadaagent/api/health` — Backend health + MCP server status
+- `GET /apps/jadaagent/api/toolcalls/recent` — Recent tool calls for right panel
+- `POST /apps/jadaagent/api/reconnect` — Reconnect MCP servers
 
 ## Testing Procedures
 
-### 1. Admin Settings Save Button
-If `jadaagent-admin.js` is not deployed (returns 404), inject it via browser console:
-```javascript
-(function() {
-  // Paste the exact content of src/admin.js here as an IIFE
-  const saveBtn = document.getElementById('save-openclaw-settings');
-  // ... rest of handler code
-})();
-```
-Then modify the URL input, click Save, verify:
-- Status span shows "Saved" (check with `document.getElementById('openclaw-settings-msg').textContent`)
-- Color is green: `document.getElementById('openclaw-settings-msg').style.color` should be `rgb(45, 134, 68)`
-- Reload page and verify value persisted
+### 1. Short Response (No Tools)
+- New chat → type "What is 2+2?" → press Enter
+- Expected: Text-only response "4" in ~2 seconds, zero tool call icons, right panel unchanged
+- Verifies: SSE `step_delta` path works independently of tool calls
 
-### 2. Chat Concurrent Request Guard
-To count POST requests to `/api/chat`, instrument XHR (NOT fetch):
-```javascript
-window.__xhrPostCount = 0;
-const origOpen = XMLHttpRequest.prototype.open;
-const origSend = XMLHttpRequest.prototype.send;
-XMLHttpRequest.prototype.open = function(method, url) {
-  this._method = method; this._url = url;
-  return origOpen.apply(this, arguments);
-};
-XMLHttpRequest.prototype.send = function() {
-  if (this._method === 'POST' && this._url && this._url.includes('/api/chat')) {
-    window.__xhrPostCount++;
-  }
-  return origSend.apply(this, arguments);
-};
-```
-The send button has `:disabled="!inputText.trim() || loading"` — this UI guard prevents clicking during loading. The `this.loading` check in `sendMessage()` is a programmatic defense-in-depth layer.
+### 2. Single Tool Call (Nextcloud Files)
+- New chat → click "List my Nextcloud files" suggestion button
+- Expected: Tool call `nextcloud__nc_webdav_list_directory` fires, ✅ icon appears, response shows ~42 folders in clean markdown, right panel shows new ✅ entry
+- Verifies: Raw JSON elimination (PR #16), right panel real-time updates
 
-### 3. Dashboard Regression
-- Navigate to Dashboard tab
-- Verify: Agent Status "Online", Skills "3 installed"
-- Click Refresh — should reload without errors
-- Note: System Info may show `_http_status200` if the array fix isn't deployed
+### 3. Calendar Tool Call
+- Same conversation → type "What's on my calendar this week?"
+- Expected: Multiple calendar tool calls (list + events per calendar), markdown table response
+- Verifies: Multi-tool orchestration within Nextcloud server, conversation continuity
 
-### 4. Settings View
-- Click Settings tab
-- Verify OpenClaw Gateway URL field is populated
-- Click "Test Connection" → should show "Connection successful — agent is online" in green
+### 4. Cross-Server Query (Proton)
+- New chat → "Show me my Proton Drive stats"
+- Expected: `proton-unified__drive_stats` fires. If Proton Bridge is up: real data. If down: ❌ icon + natural language error explanation
+- Note: Proton Bridge may be intermittently down — this is an external dependency, not a Jada bug
 
-## Infrastructure Notes
+### 5. Multi-Tool Long Response
+- New chat → "Give me a complete overview: list my files, check my calendar, show my contacts, and list my deck boards"
+- Expected: 4+ tool calls across servers, long markdown response with sections, completes without truncation or timeout
+- Verifies: No timeout caps (PR #12), multi-server orchestration, reconnect lock (PR #14)
 
-### Deployment
-- App files are at `/var/www/html/custom_apps/jadaagent/` on the Nextcloud VPS
-- JS bundles: `/var/www/html/custom_apps/jadaagent/js/`
-- PHP files: `/var/www/html/custom_apps/jadaagent/lib/`
-- After deploying PHP changes, you may need to clear opcache: `sudo -u www-data php /var/www/html/occ maintenance:repair`
-- After deploying JS changes, bump the version in `appinfo/info.xml` to bust browser cache
+### 6. Conversation Continuity
+- Same conversation as Test 5 → "How many folders were in that list?"
+- Expected: Agent responds from memory with correct count (~44 folders), no "I don't have context" error
+- Verifies: Conversation persistence, Hermes user scoping (PR #15), no double-prefix bug
 
-### OpenClaw Backend
-- Runs as Docker container on the same VPS at `http://openclaw:18789`
-- Chat endpoint: `/v1/chat/completions` (OpenAI-compatible)
-- Docker network allows Nextcloud PHP to reach `openclaw:18789` by container name
+### 7. Right Panel Persistence
+- After tests → reload page → check right panel + sidebar
+- Expected: Tool calls survive reload with correct ✅/❌ status, conversations appear in sidebar
+- Verifies: Tool call persistence to disk (PR #13), conversation file storage
+
+### 8. Error Handling
+- New chat → "List my cookbook recipes and news feeds"
+- Expected: Tools return 404 (apps not installed), ❌ icons in right panel, agent explains failure in natural language
+- Verifies: Error handling path — no raw error JSON in chat
+
+## Deployment
 
 ### SSH Access
-- The Nextcloud VPS (83.228.213.100) uses key-based SSH only
-- SSH from the main VPS (${VPS_IP}) may work if keys are configured
-- If SSH is denied, you can still test the live app via browser but cannot deploy code changes
+- SSH to `ubuntu@83.228.213.100` (use VPS_ROOT_PASSWORD via sudo)
+- Key-based auth — the SSH key works with `ubuntu@` (NOT `root@`)
 
-### Vue Component Access
-- The Vue app is NOT mounted on `#app` or `#content-vue` — it mounts on a different element
-- `document.querySelector('#terms_of_service_confirm').__vue_app__` was found but doesn't give access to chat component
-- For programmatic testing of Vue methods, you may need to find the component through the internal component tree
+### Deploying Backend Changes
+```bash
+ssh ubuntu@83.228.213.100
+sudo docker exec -it hermes-backend sh
+cd /app && git pull origin main
+exit
+sudo docker restart hermes-backend
+```
+
+### Deploying Frontend/PHP Changes
+The Nextcloud app files are inside the `nextcloud-aio-nextcloud` Docker container:
+```bash
+ssh ubuntu@83.228.213.100
+sudo docker exec -it nextcloud-aio-nextcloud bash
+cd /var/www/html/custom_apps/jadaagent
+git pull origin main
+exit
+```
+Note: PHP opcache may need clearing. Bump version in `appinfo/info.xml` to bust JS cache.
+
+### Verifying Deployment
+```bash
+# Check backend health
+curl -s https://next.garzaos.online/apps/jadaagent/api/health | python3 -m json.tool
+
+# Verify specific fix is deployed (grep for unique strings)
+sudo docker exec hermes-backend grep 'YOUR_UNIQUE_STRING' /app/server.mjs
+```
 
 ## Common Issues
 
-1. **Browser console returns `undefined`** for multi-line scripts — use IIFEs or single expressions
-2. **fetch instrumentation shows 0 count** — the app uses XHR, not fetch. Instrument `XMLHttpRequest.prototype` instead
-3. **Enter key in textarea adds newline** — use the Send button (click) instead of pressing Enter
-4. **Admin.js 404** — file exists in repo but may not be deployed. Inject via console as workaround
-5. **CSS color format** — browser returns `rgb(r, g, b)` not hex. `rgb(45, 134, 68)` = `#2d8644`
+1. **Proton-Unified tools return connection refused** — Proton Bridge upstream at `mcp.garzaos.cloud` may be down. Not a Jada bug. Check with: `curl -s https://mcp.garzaos.cloud/health`
+2. **Right panel shows "No recent tool calls"** — Verify `/api/toolcalls/recent` endpoint returns data. May need Hermes restart.
+3. **Old conversations show raw JSON** — Expected for conversations created before PR #16. Only new conversations benefit from the fix.
+4. **Chat body shows 🔧 for failed tools** — Known minor visual issue. Right panel correctly shows ❌. The chat message body doesn't update tool icons to error state.
+5. **Duplicate tool calls in error recovery** — Agent may retry failed tools multiple times (e.g., 13 calls for a simple query). System prompt partially prevents this but not fully during fallback rounds.
+6. **Notes are locked** — `nc_notes_get_note` calls may fail with "Locked" if notes are open elsewhere. Agent should fall back to WebDAV file reads.
+7. **Enter key sends message** — Unlike older versions, Enter now sends. Shift+Enter for newline.
+8. **App uses XMLHttpRequest** — NOT fetch. If instrumenting network calls, hook into `XMLHttpRequest.prototype`.
