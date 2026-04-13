@@ -244,9 +244,6 @@ export default {
 					this.scrollToBottom()
 				}
 
-				// Save conversation to localStorage for persistence
-				this.saveToLocalStorage()
-
 				// Finalize message
 				this.messages.push({
 					role: 'assistant',
@@ -254,6 +251,8 @@ export default {
 					timestamp: new Date(),
 					toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
 				})
+				// Save conversation to localStorage AFTER assistant message is added
+				this.saveToLocalStorage()
 			} catch (err) {
 				if (err.name === 'AbortError') return
 				// Fallback to non-streaming

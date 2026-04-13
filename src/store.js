@@ -165,7 +165,7 @@ export const actions = {
 			const data = await api.getHealth()
 			// Hermes Agent returns model list from /v1/models via PHP proxy
 			// Accept any non-error response as healthy
-			store.healthy = !data?.error
+			store.healthy = data?.ok === true
 			store.healthData = data
 
 			// Extract MCP server info if available
