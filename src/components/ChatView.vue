@@ -363,7 +363,7 @@ export default {
 				const indexKey = `${prefix}_conversations`
 				const index = JSON.parse(localStorage.getItem(indexKey) || '[]')
 				const existing = index.findIndex(c => c.id === data.id)
-				const entry = { id: data.id, title: data.title, updatedAt: data.updatedAt }
+				const entry = { id: data.id, title: data.title, updatedAt: data.updatedAt, workspace: store.activeWorkspaceId }
 				if (existing >= 0) {
 					index[existing] = entry
 				} else {
