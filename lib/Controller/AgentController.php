@@ -245,30 +245,33 @@ class AgentController extends Controller {
 
     /**
      * @NoAdminRequired
+     * LibreChat doesn't expose a skills endpoint — return empty list.
      */
     public function getSkills(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/v1/skills', $this->getUserHeaders()));
+        return new JSONResponse(['skills' => []]);
     }
 
     /**
      * @NoAdminRequired
+     * Proxy to LibreChat's models endpoint (agents API).
      */
     public function getModels(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/v1/models', $this->getUserHeaders()));
+        $apiPath = $this->openClaw->getApiPath();
+        return new JSONResponse($this->openClaw->get($apiPath . '/models', $this->getUserHeaders()));
     }
 
     /**
-     * Admin only — returns config which may contain sensitive data.
+     * Admin only — LibreChat config is managed via its own admin UI.
      */
     public function getConfig(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/v1/config', $this->getUserHeaders()));
+        return new JSONResponse(['engine' => 'librechat', 'message' => 'Configuration managed via LibreChat admin UI']);
     }
 
     /**
-     * Admin only — returns session data.
+     * Admin only — LibreChat manages sessions internally.
      */
     public function getSessions(): JSONResponse {
-        return new JSONResponse($this->openClaw->get('/api/v1/sessions', $this->getUserHeaders()));
+        return new JSONResponse(['sessions' => []]);
     }
 
     /**
