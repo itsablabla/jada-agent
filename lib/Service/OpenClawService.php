@@ -270,6 +270,9 @@ class OpenClawService {
             $response = curl_exec($ch2);
             $httpCode = curl_getinfo($ch2, CURLINFO_HTTP_CODE);
             curl_close($ch2);
+            if ($response === false) {
+                return ['error' => 'JWT retry request failed', 'status' => 0];
+            }
             $decoded = json_decode($response, true);
             if ($decoded === null) {
                 return ['error' => 'JWT retry failed', 'status' => $httpCode];
