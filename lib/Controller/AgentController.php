@@ -12,10 +12,11 @@ use OCP\IRequest;
 use OCP\IUserSession;
 
 /**
- * Thin proxy controller for Hermes backend.
+ * Thin proxy controller for LibreChat backend.
  *
- * Hermes is the authoritative owner of conversation state, user scoping,
- * tool call tracking, and session management.  PHP's only job is to:
+ * LibreChat provides native MCP support (118 Nextcloud tools), multi-model
+ * switching, agent framework, and built-in context compression.
+ * PHP's only job is to:
  *   1. Verify Nextcloud authentication (handled by the framework)
  *   2. Forward the user's identity via X-Nextcloud-User / X-Nextcloud-Name
  *   3. Pipe the request/response through without transformation
@@ -37,7 +38,7 @@ class AgentController extends Controller {
 
     /**
      * Get the current Nextcloud user identity headers.
-     * These are sent to Hermes so it can scope everything to the user.
+     * These are sent to LibreChat so it can scope everything to the user.
      */
     private function getUserHeaders(): array {
         $user = $this->userSession->getUser();
@@ -52,16 +53,20 @@ class AgentController extends Controller {
     /**
      * @NoAdminRequired
      *
-     * Health check — queries Hermes Agent /v1/models to verify it's alive.
+     * Health check — queries LibreChat /api/agents/v1/models to verify it's alive.
      */
     public function health(): JSONResponse {
-        $result = $this->openClaw->get('/v1/models', $this->getUserHeaders());
+        $apiPath = $this->openClaw->getApiPath();
+        $result = $this->openClaw->get($apiPath . '/models', $this->getUserHeaders());
         $models = $result['data'] ?? [];
-        $isOk = !isset($result['error']);
+        $isOk = !isset($result['error']) && count($models) > 0;
 
-        // Hermes Agent manages MCP servers internally via config.yaml.
-        // Report the configured servers so the UI can display tool/server counts.
-        // Active MCP servers (composio and proton-unified disabled for perf)
+        // Extract agent info from the first available model
+        $agentName = $models[0]['name'] ?? 'Jada';
+        $agentDesc = $models[0]['description'] ?? '';
+        $provider = $models[0]['provider'] ?? 'Gemini';
+
+        // LibreChat manages MCP servers via librechat.yaml
         $mcpServers = [
             'nextcloud' => ['tools' => 118, 'status' => 'connected'],
         ];
@@ -69,8 +74,8 @@ class AgentController extends Controller {
         return new JSONResponse([
             'ok' => $isOk,
             'status' => $isOk ? 'ok' : 'error',
-            'engine' => 'hermes-agent',
-            'model_name' => 'Gemini 2.5 Flash',
+            'engine' => 'librechat',
+            'model_name' => $provider . ' (via LibreChat)',
             'models' => count($models),
             'servers' => $mcpServers,
             'tool_count' => 118,
@@ -87,7 +92,7 @@ class AgentController extends Controller {
     /**
      * @NoAdminRequired
      *
-     * Non-streaming chat fallback via Hermes Agent OpenAI-compatible API.
+     * Non-streaming chat fallback via LibreChat OpenAI-compatible API.
      */
     public function chat(): JSONResponse {
         $message = $this->request->getParam('message', '');
@@ -97,8 +102,9 @@ class AgentController extends Controller {
             ? $this->sanitizeMessages($messages)
             : [['role' => 'user', 'content' => $message]];
 
-        $result = $this->openClaw->post('/v1/chat/completions', [
-            'model' => 'hermes-agent',
+        $apiPath = $this->openClaw->getApiPath();
+        $result = $this->openClaw->post($apiPath . '/chat/completions', [
+            'model' => 'agent_jada_nextcloud',
             'messages' => $chatMessages,
             'stream' => false,
         ], $this->getUserHeaders());
@@ -122,8 +128,9 @@ class AgentController extends Controller {
     /**
      * @NoAdminRequired
      *
-     * SSE passthrough to Hermes Agent OpenAI-compatible streaming API.
-     * Hermes handles context management, tool execution, and compression natively.
+     * SSE passthrough to LibreChat OpenAI-compatible streaming API.
+     * LibreChat handles context management, MCP tool execution, and
+     * multi-model routing natively.
      */
     public function chatSSE(): void {
         $message = $this->request->getParam('message', '');
@@ -144,12 +151,13 @@ class AgentController extends Controller {
         header('Connection: keep-alive');
         header('X-Accel-Buffering: no');
 
-        $url = $this->openClaw->getBaseUrl() . '/v1/chat/completions';
+        $apiPath = $this->openClaw->getApiPath();
+        $url = $this->openClaw->getBaseUrl() . $apiPath . '/chat/completions';
         $token = $this->openClaw->getApiToken();
         $userHeaders = $this->getUserHeaders();
 
         $payload = json_encode([
-            'model' => 'hermes-agent',
+            'model' => 'agent_jada_nextcloud',
             'messages' => $chatMessages,
             'stream' => true,
         ]);
@@ -231,7 +239,7 @@ class AgentController extends Controller {
      * @NoAdminRequired
      */
     public function reconnect(): JSONResponse {
-        // Hermes Agent handles MCP reconnection internally
+        // LibreChat handles MCP reconnection internally
         return new JSONResponse(['status' => 'ok']);
     }
 

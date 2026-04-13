@@ -24,7 +24,7 @@ export default {
 	},
 
 	/**
-	 * Open an SSE stream to the Hermes Agent backend (OpenAI-compatible).
+	 * Open an SSE stream to the LibreChat backend (OpenAI-compatible).
 	 * @param {Array} messages - Full conversation history [{role, content}, ...]
 	 * @returns {{ promise: Promise<Response>, cancel: Function }}
 	 */
