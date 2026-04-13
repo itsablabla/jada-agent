@@ -283,7 +283,9 @@ export const actions = {
 		store.activeConversationId = conversationId
 		store.messages = []
 		store.recentToolCalls = []
-		await this.loadConversationMessages(conversationId)
+		// Don't call loadConversationMessages here — ChatView's watcher on
+		// activeConversationId already triggers loadServerMessages(), so calling
+		// it here would cause a duplicate API request.
 		store.currentView = 'chat'
 	},
 
