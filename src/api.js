@@ -14,8 +14,12 @@ export default {
 		return res.data
 	},
 
-	async sendMessage(message, conversationId = 'main') {
-		const res = await axios.post(`${baseUrl}/api/chat`, { message, conversation_id: conversationId })
+	async sendMessage(messages, conversationId = 'main') {
+		// Accept either a full messages array or a single string for backward compat
+		const payload = Array.isArray(messages)
+			? { messages, conversation_id: conversationId }
+			: { message: messages, conversation_id: conversationId }
+		const res = await axios.post(`${baseUrl}/api/chat`, payload)
 		return res.data
 	},
 

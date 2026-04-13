@@ -255,9 +255,10 @@ export default {
 				this.saveToLocalStorage()
 			} catch (err) {
 				if (err.name === 'AbortError') return
-				// Fallback to non-streaming
+				// Fallback to non-streaming — send full history for context
 				try {
-					const result = await api.sendMessage(message, store.activeConversationId)
+					const allMessages = this.messages.map(m => ({ role: m.role, content: m.content }))
+					const result = await api.sendMessage(allMessages, store.activeConversationId)
 					this.messages.push({
 						role: 'assistant',
 						content: result.response || result.message || JSON.stringify(result),
@@ -270,6 +271,8 @@ export default {
 						timestamp: new Date(),
 					})
 				}
+				// Save conversation in error/fallback paths too
+				this.saveToLocalStorage()
 			} finally {
 				this.loading = false
 				this.streamingText = ''
@@ -362,6 +365,7 @@ export default {
 
 		/** Load conversation from localStorage */
 		loadFromLocalStorage(conversationId) {
+			this.messages = []
 			try {
 				const data = JSON.parse(localStorage.getItem(`jada_conv_${conversationId}`) || 'null')
 				if (data?.messages) {
