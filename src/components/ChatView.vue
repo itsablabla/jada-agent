@@ -385,6 +385,7 @@ export default {
 	flex-direction: column;
 	height: 100%;
 	min-height: 0;
+	overflow: hidden;
 }
 
 /* ─── Empty state ─── */
@@ -396,6 +397,8 @@ export default {
 	justify-content: center;
 	text-align: center;
 	padding: 40px 20px;
+	min-height: 0;
+	overflow-y: auto;
 }
 
 .jada-chat-empty-icon {
