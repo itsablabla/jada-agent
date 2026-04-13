@@ -134,11 +134,15 @@ class AgentController extends Controller {
         $token = $this->openClaw->getApiToken();
         $userHeaders = $this->getUserHeaders();
 
-        $payload = json_encode([
+        $payloadData = [
             'model' => 'agent_jada_nextcloud',
             'messages' => $chatMessages,
             'stream' => true,
-        ]);
+        ];
+        if ($conversationId !== null) {
+            $payloadData['conversationId'] = $conversationId;
+        }
+        $payload = json_encode($payloadData);
 
         $ch = curl_init();
         curl_setopt_array($ch, [
