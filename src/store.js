@@ -141,24 +141,25 @@ export const actions = {
 		// Load health
 		await this.refreshHealth()
 
-		// Load conversations for active workspace
-		await this.loadConversations()
-
-		// Note: loadRecentToolCalls() removed — backend now returns empty stub
-		// since conversation state moved to localStorage. Tool calls are
-		// accumulated in-memory during streaming via addToolCall().
-
-		// Load user profile
+		// Load user profile BEFORE conversations — loadConversations() uses
+		// store.userProfile.uid to build the localStorage key prefix.
 		try {
 			store.userProfile = await api.getUserProfile()
 		} catch {
 			// Profile endpoint may not exist yet — use Nextcloud user info
 			store.userProfile = {
-				uid: window.OC?.currentUser || 'admin',
+				uid: window.OC?.currentUser || 'default',
 				displayName: window.OC?.getCurrentUser?.()?.displayName || 'User',
 				email: '',
 			}
 		}
+
+		// Load conversations for active workspace (after userProfile so key prefix is correct)
+		await this.loadConversations()
+
+		// Note: loadRecentToolCalls() removed — backend now returns empty stub
+		// since conversation state moved to localStorage. Tool calls are
+		// accumulated in-memory during streaming via addToolCall().
 	},
 
 	async refreshHealth() {
