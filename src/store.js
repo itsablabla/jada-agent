@@ -23,6 +23,7 @@ export const store = reactive({
 	healthData: null,
 	mcpServers: [],
 	totalTools: 0,
+	modelName: '',
 	recentToolCalls: [],
 
 	// User
@@ -183,6 +184,10 @@ export const actions = {
 				store.totalTools = data.tools
 			} else if (data?.tool_count) {
 				store.totalTools = data.tool_count
+			}
+
+			if (data?.model_name) {
+				store.modelName = data.model_name
 			}
 		} catch {
 			store.healthy = false

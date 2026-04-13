@@ -61,19 +61,19 @@ class AgentController extends Controller {
 
         // Hermes Agent manages MCP servers internally via config.yaml.
         // Report the configured servers so the UI can display tool/server counts.
+        // Active MCP servers (composio and proton-unified disabled for perf)
         $mcpServers = [
             'nextcloud' => ['tools' => 118, 'status' => 'connected'],
-            'composio'  => ['tools' => 122, 'status' => 'connected'],
-            'proton-unified' => ['tools' => 63, 'status' => 'connected'],
         ];
 
         return new JSONResponse([
             'ok' => $isOk,
             'status' => $isOk ? 'ok' : 'error',
             'engine' => 'hermes-agent',
+            'model_name' => 'Gemini 2.5 Flash',
             'models' => count($models),
             'servers' => $mcpServers,
-            'tool_count' => 303,
+            'tool_count' => 118,
         ]);
     }
 

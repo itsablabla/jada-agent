@@ -86,7 +86,7 @@
 				</button>
 			</div>
 			<div class="jada-input-footer">
-				<span class="jada-input-model">Qwen 3.5 Plus</span>
+				<span class="jada-input-model">{{ store.modelName || 'Gemini 2.5 Flash' }}</span>
 				<span class="jada-input-tools">&middot; {{ store.totalTools }} tools</span>
 				<span class="jada-input-ws">&middot; Workspace: {{ activeWsName }}</span>
 			</div>
