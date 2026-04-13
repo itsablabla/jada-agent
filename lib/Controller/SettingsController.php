@@ -26,7 +26,7 @@ class SettingsController extends Controller {
      */
     public function getSettings(): JSONResponse {
         return new JSONResponse([
-            'openclaw_url' => $this->config->getAppValue('jadaagent', 'openclaw_url', 'http://localhost:18789'),
+            'openclaw_url' => $this->config->getAppValue('jadaagent', 'openclaw_url', 'http://LibreChat:3080'),
             'openclaw_token' => $this->config->getAppValue('jadaagent', 'openclaw_token', '') ? '••••••••' : '',
         ]);
     }
