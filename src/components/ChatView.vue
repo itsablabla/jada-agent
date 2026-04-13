@@ -388,8 +388,10 @@ export default {
 		/** Load conversation from localStorage */
 		loadFromLocalStorage(conversationId) {
 			const prefix = this.storagePrefix()
-			// Only clear messages if we actually find stored data — prevents
-			// wiping in-progress messages during watcher-triggered reloads
+			// Always clear messages first — the watcher's if(!this.loading) guard
+			// already prevents this from running during handleSend(), so clearing
+			// is safe here and necessary for "+ New Chat" to start fresh.
+			this.messages = []
 			try {
 				// Try user-scoped key first, fall back to legacy unscoped key
 				const raw = localStorage.getItem(`${prefix}_conv_${conversationId}`)
