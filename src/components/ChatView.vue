@@ -250,6 +250,7 @@ export default {
 							}
 						} catch {
 							// Ignore unparseable lines
+							currentEvent = ''
 						}
 					}
 					this.scrollToBottom()
@@ -265,7 +266,10 @@ export default {
 				// Save conversation to localStorage AFTER assistant message is added
 				this.saveToLocalStorage(conversationId)
 			} catch (err) {
-				if (err.name === 'AbortError') return
+				if (err.name === 'AbortError') {
+					this.saveToLocalStorage(conversationId)
+					return
+				}
 				// Fallback to non-streaming — send full history for context
 				try {
 					const allMessages = this.messages.map(m => ({ role: m.role, content: m.content }))
