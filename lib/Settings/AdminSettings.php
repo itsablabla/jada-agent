@@ -19,6 +19,8 @@ class AdminSettings implements ISettings {
         $params = [
             'openclaw_url' => $this->config->getAppValue('jadaagent', 'openclaw_url', 'http://LibreChat:3080'),
             'openclaw_token' => $this->config->getAppValue('jadaagent', 'openclaw_token', '') ? '••••••••' : '',
+            'librechat_service_email' => $this->config->getAppValue('jadaagent', 'librechat_service_email', 'jada@nextcloud.local'),
+            'librechat_service_password' => $this->config->getAppValue('jadaagent', 'librechat_service_password', '') ? '••••••••' : '',
         ];
         return new TemplateResponse('jadaagent', 'admin', $params);
     }

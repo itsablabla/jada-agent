@@ -28,6 +28,8 @@ class SettingsController extends Controller {
         return new JSONResponse([
             'openclaw_url' => $this->config->getAppValue('jadaagent', 'openclaw_url', 'http://LibreChat:3080'),
             'openclaw_token' => $this->config->getAppValue('jadaagent', 'openclaw_token', '') ? '••••••••' : '',
+            'librechat_service_email' => $this->config->getAppValue('jadaagent', 'librechat_service_email', 'jada@nextcloud.local'),
+            'librechat_service_password' => $this->config->getAppValue('jadaagent', 'librechat_service_password', '') ? '••••••••' : '',
         ]);
     }
 
@@ -69,6 +71,20 @@ class SettingsController extends Controller {
             $this->config->setAppValue('jadaagent', 'openclaw_token', $token);
         } elseif ($token === '') {
             $this->config->deleteAppValue('jadaagent', 'openclaw_token');
+        }
+
+        // LibreChat service account credentials
+        $serviceEmail = $this->request->getParam('librechat_service_email', '');
+        $servicePassword = $this->request->getParam('librechat_service_password', '');
+
+        if ($serviceEmail !== '' && $serviceEmail !== '••••••••') {
+            $this->config->setAppValue('jadaagent', 'librechat_service_email', $serviceEmail);
+        }
+        if ($servicePassword !== '' && $servicePassword !== '••••••••') {
+            $this->config->setAppValue('jadaagent', 'librechat_service_password', $servicePassword);
+            // Clear cached JWT so next request re-authenticates with new credentials
+            $this->config->deleteAppValue('jadaagent', 'librechat_jwt');
+            $this->config->deleteAppValue('jadaagent', 'librechat_jwt_at');
         }
 
         return new JSONResponse(['status' => 'ok']);

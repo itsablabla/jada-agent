@@ -21,8 +21,7 @@ class OpenClawService {
     private const DEFAULT_URL = 'http://LibreChat:3080';
     private const DEFAULT_API_PATH = '/api/agents/v1';
     private const JWT_TTL_SECONDS = 840; // 14 minutes (JWT expires in 15)
-    private const SERVICE_EMAIL = 'jada@nextcloud.local';
-    private const SERVICE_PASSWORD = 'JadaService2026!';
+    private const DEFAULT_SERVICE_EMAIL = 'jada@nextcloud.local';
 
     private IConfig $config;
     private LoggerInterface $logger;
@@ -143,12 +142,20 @@ class OpenClawService {
 
     /**
      * Login to LibreChat and obtain a JWT token.
+     * Credentials are read from Nextcloud app config (set via admin settings).
      */
     private function loginForJwt(): string {
+        $email = $this->config->getAppValue('jadaagent', 'librechat_service_email', self::DEFAULT_SERVICE_EMAIL);
+        $password = $this->config->getAppValue('jadaagent', 'librechat_service_password', '');
+        if ($password === '') {
+            $this->logger->error('LibreChat service password not configured — set it in Jada Agent admin settings');
+            return '';
+        }
+
         $url = $this->getBaseUrl() . '/api/auth/login';
         $payload = json_encode([
-            'email' => self::SERVICE_EMAIL,
-            'password' => self::SERVICE_PASSWORD,
+            'email' => $email,
+            'password' => $password,
         ]);
 
         $ch = curl_init();
@@ -251,7 +258,12 @@ class OpenClawService {
                 return ['error' => 'JWT re-authentication failed', 'status' => 401];
             }
             // One-shot retry — don't recurse to avoid infinite loop
-            $headers[array_search('Authorization: Bearer ' . $token, $headers)] = 'Authorization: Bearer ' . $freshToken;
+            $authIndex = array_search('Authorization: Bearer ' . $token, $headers);
+            if ($authIndex !== false) {
+                $headers[$authIndex] = 'Authorization: Bearer ' . $freshToken;
+            } else {
+                $headers[] = 'Authorization: Bearer ' . $freshToken;
+            }
             $ch2 = curl_init();
             $opts[CURLOPT_HTTPHEADER] = $headers;
             curl_setopt_array($ch2, $opts);
