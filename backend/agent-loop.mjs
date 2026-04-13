@@ -27,6 +27,7 @@ export async function agentLoop({
 
   let messages = [...conversation];
   let round = 0;
+  let callSeq = 0; // unique sequential ID for each tool call
 
   // Track failed tool calls to prevent duplicate retries
   // Key: "toolName:argsHash", Value: error message
@@ -157,8 +158,9 @@ export async function agentLoop({
         const dedupKey = tc.name + ":" + JSON.stringify(args);
         if (failedTools.has(dedupKey)) {
           const prevError = failedTools.get(dedupKey);
-          onToolCall(tc.name, args);
-          onToolResult(tc.name, { content: `Skipped: already failed this session — ${prevError}`, isError: true });
+          const cid = callSeq++;
+          onToolCall(tc.name, args, cid);
+          onToolResult(tc.name, { content: `Skipped: already failed this session — ${prevError}`, isError: true }, cid);
           return {
             role: "tool",
             tool_call_id: tc.id,
@@ -166,7 +168,8 @@ export async function agentLoop({
           };
         }
 
-        onToolCall(tc.name, args);
+        const cid = callSeq++;
+        onToolCall(tc.name, args, cid);
 
         const result = await mcpHub.callTool(tc.name, args);
 
@@ -189,7 +192,7 @@ export async function agentLoop({
           failedTools.set(dedupKey, textContent.slice(0, 200));
         }
 
-        onToolResult(tc.name, { content: textContent, isError: result.isError });
+        onToolResult(tc.name, { content: textContent, isError: result.isError }, cid);
 
         return {
           role: "tool",
