@@ -191,8 +191,19 @@ export const actions = {
 
 	async loadConversations() {
 		// Load conversation list from localStorage (Hermes Agent manages sessions internally)
+		// Use user-scoped key to prevent cross-user data leaks on shared origins
+		const uid = store.userProfile?.uid || window.OC?.currentUser || 'default'
+		const scopedKey = `jada_${uid}_conversations`
 		try {
-			const index = JSON.parse(localStorage.getItem('jada_conversations') || '[]')
+			let index = JSON.parse(localStorage.getItem(scopedKey) || '[]')
+			// Migrate legacy unscoped data on first load
+			if (index.length === 0) {
+				const legacy = JSON.parse(localStorage.getItem('jada_conversations') || '[]')
+				if (legacy.length > 0) {
+					index = legacy
+					localStorage.setItem(scopedKey, JSON.stringify(index))
+				}
+			}
 			store.conversations = index
 		} catch {
 			store.conversations = []

@@ -135,7 +135,12 @@ export default {
 	},
 	watch: {
 		'store.activeConversationId'() {
-			this.loadConversation()
+			// Don't reload while actively sending — startNewChat() triggers this
+			// watcher mid-send, and loadFromLocalStorage() would wipe the
+			// just-added user message for brand-new conversations.
+			if (!this.loading) {
+				this.loadConversation()
+			}
 		},
 	},
 	mounted() {
@@ -235,6 +240,10 @@ export default {
 									if (tc.status === 'running') tc.status = 'success'
 								})
 								this.streamingToolCalls = [...toolCalls]
+								// Also update right panel store entries
+								store.recentToolCalls.forEach(tc => {
+									if (tc.status === 'running') tc.status = 'success'
+								})
 							}
 						} catch {
 							// Ignore unparseable lines
@@ -330,11 +339,18 @@ export default {
 			el.style.height = Math.min(el.scrollHeight, 120) + 'px'
 		},
 
+		/** Get user-scoped localStorage key prefix to prevent cross-user data leaks */
+		storagePrefix() {
+			const uid = store.userProfile?.uid || window.OC?.currentUser || 'default'
+			return `jada_${uid}`
+		},
+
 		/** Save current conversation to localStorage for persistence across reloads */
 		saveToLocalStorage() {
 			if (!store.activeConversationId) return
 			try {
-				const convKey = `jada_conv_${store.activeConversationId}`
+				const prefix = this.storagePrefix()
+				const convKey = `${prefix}_conv_${store.activeConversationId}`
 				const data = {
 					id: store.activeConversationId,
 					messages: this.messages,
@@ -344,7 +360,7 @@ export default {
 				localStorage.setItem(convKey, JSON.stringify(data))
 
 				// Update conversation list index
-				const indexKey = 'jada_conversations'
+				const indexKey = `${prefix}_conversations`
 				const index = JSON.parse(localStorage.getItem(indexKey) || '[]')
 				const existing = index.findIndex(c => c.id === data.id)
 				const entry = { id: data.id, title: data.title, updatedAt: data.updatedAt }
@@ -357,7 +373,7 @@ export default {
 				if (index.length > 50) {
 					const removed = index.splice(50)
 					removed.forEach(c => {
-						try { localStorage.removeItem(`jada_conv_${c.id}`) } catch {}
+						try { localStorage.removeItem(`${prefix}_conv_${c.id}`) } catch {}
 					})
 				}
 				localStorage.setItem(indexKey, JSON.stringify(index))
@@ -371,9 +387,14 @@ export default {
 
 		/** Load conversation from localStorage */
 		loadFromLocalStorage(conversationId) {
-			this.messages = []
+			const prefix = this.storagePrefix()
+			// Only clear messages if we actually find stored data — prevents
+			// wiping in-progress messages during watcher-triggered reloads
 			try {
-				const data = JSON.parse(localStorage.getItem(`jada_conv_${conversationId}`) || 'null')
+				// Try user-scoped key first, fall back to legacy unscoped key
+				const raw = localStorage.getItem(`${prefix}_conv_${conversationId}`)
+					|| localStorage.getItem(`jada_conv_${conversationId}`)
+				const data = raw ? JSON.parse(raw) : null
 				if (data?.messages) {
 					this.messages = data.messages.map(m => ({
 						...m,
