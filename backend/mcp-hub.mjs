@@ -188,13 +188,19 @@ export class McpHub {
     const toolName = qualifiedName.slice(sepIdx + 2);
 
     const entry = this.#servers.get(serverName);
-    if (!entry || !entry.client) {
+    if (!entry) {
+      return { content: [{ type: "text", text: `Server ${serverName} not configured` }], isError: true };
+    }
+
+    // Snapshot the client reference — if reconnect replaces it, we retry with the new one
+    let client = entry.client;
+    if (!client) {
       return { content: [{ type: "text", text: `Server ${serverName} not connected` }], isError: true };
     }
 
     try {
       // No timeout — let tool calls run until they complete naturally
-      const result = await entry.client.callTool({ name: toolName, arguments: args });
+      const result = await client.callTool({ name: toolName, arguments: args });
       return result;
     } catch (err) {
       const msg = err.message || "";
@@ -203,13 +209,14 @@ export class McpHub {
         console.warn(`Session error on ${serverName}, reconnecting: ${msg}`);
         try {
           await this.reconnect(serverName);
-          console.log(`✓ Reconnected ${serverName}, retrying tool call`);
-          // After reconnect, entry object is the SAME (we reuse it), so entry.client is updated
-          if (entry.client) {
-            const result = await entry.client.callTool({ name: toolName, arguments: args });
-            return result;
+          // Re-read client from entry AFTER reconnect completes (atomic swap guarantees new client)
+          const freshClient = entry.client;
+          if (!freshClient) {
+            return { content: [{ type: "text", text: `Tool error: reconnect succeeded but client unavailable` }], isError: true };
           }
-          return { content: [{ type: "text", text: `Tool error: reconnect succeeded but client unavailable` }], isError: true };
+          console.log(`✓ Reconnected ${serverName}, retrying tool call`);
+          const result = await freshClient.callTool({ name: toolName, arguments: args });
+          return result;
         } catch (reconnectErr) {
           console.error(`Reconnect+retry failed for ${qualifiedName}:`, reconnectErr.message);
           return { content: [{ type: "text", text: `Tool error: reconnect failed — ${reconnectErr.message}` }], isError: true };
