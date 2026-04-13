@@ -239,7 +239,7 @@ export default {
 									const rawName = tc.function?.name
 									if (!rawName) continue
 									// Strip _mcp_serverName suffix for display
-									const displayName = rawName.replace(/_mcp_[^_]+$/, '')
+									const displayName = rawName.replace(/_mcp_.+$/, '')
 									// Avoid duplicates if the same tool_call streams across chunks
 									const callId = tc.id || rawName
 									if (!toolCalls.find(t => t.callId === callId)) {
