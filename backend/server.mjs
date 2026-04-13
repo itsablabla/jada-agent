@@ -115,9 +115,14 @@ function generateTitle(content) {
   return clean.length > 60 ? clean.slice(0, 57) + '...' : clean;
 }
 
-function appendMessage(convId, role, content) {
+function appendMessage(convId, role, content, toolCalls) {
   const conv = getConversation(convId);
-  conv.messages.push({ role, content });
+  const msg = { role, content };
+  // Attach tool calls to the message so the frontend can render icons after reload
+  if (toolCalls && toolCalls.length > 0) {
+    msg.toolCalls = toolCalls;
+  }
+  conv.messages.push(msg);
   // Set title from first user message
   if (role === 'user' && !conv.title) {
     conv.title = generateTitle(content);
@@ -311,6 +316,7 @@ app.post("/api/chat", async (req, res) => {
   }
 
   let fullText = "";
+  const requestToolCalls = []; // track tool calls for this request to persist with message
 
   try {
     const useModel = reqModel || MODEL;
@@ -337,23 +343,31 @@ app.post("/api/chat", async (req, res) => {
       onReasoning: (text) => {
         safeWrite(`event: reason_delta\ndata: ${JSON.stringify({ text })}\n\n`);
       },
-      onToolCall: (name, args) => {
+      onToolCall: (name, args, callId) => {
         // Only emit structured event — do NOT pollute fullText with tool markup.
         // The frontend uses tool_start events to render tool call UI components.
-        safeWrite(`event: tool_start\ndata: ${JSON.stringify({ tool: name, args: args || {} })}\n\n`);
+        // callId uniquely identifies this call so tool_result can match correctly
+        // even when multiple tools have the same name.
+        safeWrite(`event: tool_start\ndata: ${JSON.stringify({ tool: name, args: args || {}, callId })}\n\n`);
+        // Track for this request (persisted with message later)
+        requestToolCalls.push({ name, status: 'running', result: null, callId, timestamp: Date.now() });
         // Persist tool call start
         addToolCall(convId, name, 'running', null);
       },
-      onToolResult: (name, result) => {
+      onToolResult: (name, result, callId) => {
         const preview = result.content?.slice(0, 200) || "done";
+        const status = result.isError ? 'error' : 'success';
         // Only emit structured event — do NOT pollute fullText with raw JSON.
-        // The frontend uses tool_result events to update tool call UI components.
-        safeWrite(`event: tool_result\ndata: ${JSON.stringify({ tool: name, status: result.isError ? 'error' : 'success', result: preview })}\n\n`);
-        // Update persisted tool call with result
+        // callId lets the frontend match this result to the exact tool_start event.
+        safeWrite(`event: tool_result\ndata: ${JSON.stringify({ tool: name, status, result: preview, callId })}\n\n`);
+        // Update request-level tracking
+        const rtc = requestToolCalls.find(t => t.callId === callId);
+        if (rtc) { rtc.status = status; rtc.result = preview; }
+        // Update persisted conversation-level tool call
         const conv = getConversation(convId);
         const tc = [...conv.toolCalls].reverse().find(t => t.name === name && t.status === 'running');
         if (tc) {
-          tc.status = result.isError ? 'error' : 'success';
+          tc.status = status;
           tc.result = preview;
         }
         schedulePersist();
@@ -362,7 +376,7 @@ app.post("/api/chat", async (req, res) => {
 
     // Always store assistant response in shared memory (even if client disconnected)
     if (fullText) {
-      appendMessage(convId, "assistant", fullText);
+      appendMessage(convId, "assistant", fullText, requestToolCalls.length > 0 ? requestToolCalls : undefined);
     }
 
     // Send step_complete only if client is still connected
@@ -377,7 +391,7 @@ app.post("/api/chat", async (req, res) => {
 
     // Always persist whatever text was accumulated (partial response is better than nothing)
     if (fullText) {
-      appendMessage(convId, "assistant", fullText);
+      appendMessage(convId, "assistant", fullText, requestToolCalls.length > 0 ? requestToolCalls : undefined);
     }
 
     if (!clientDisconnected) {

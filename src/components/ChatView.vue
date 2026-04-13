@@ -229,9 +229,10 @@ export default {
 								this.streamingText = fullText
 							} else if (evtType === 'tool_start' || evtType === 'tool_call') {
 								const name = parsed.tool || parsed.name || 'tool'
-								toolCalls.push({ name, status: 'running', result: null })
+								const callId = parsed.callId != null ? parsed.callId : null
+								toolCalls.push({ name, status: 'running', result: null, callId })
 								this.streamingToolCalls = [...toolCalls]
-								actions.addToolCall({ name, status: 'running', timestamp: new Date() })
+								actions.addToolCall({ name, status: 'running', callId, timestamp: new Date() })
 							} else if (evtType === 'step_complete') {
 								// Final complete message — use as authoritative text
 								if (parsed.text && !fullText) {
@@ -245,11 +246,14 @@ export default {
 								}
 								this.streamingToolCalls = [...toolCalls]
 							} else if (evtType === 'tool_result') {
-								// Match by tool name (find the last running one with that name)
+								// Match by unique callId (preferred) or fall back to name+status
 								const toolName = parsed.tool || parsed.name
-								const match = toolName
-									? [...toolCalls].reverse().find(t => t.name === toolName && t.status === 'running')
-									: toolCalls[toolCalls.length - 1]
+								const callId = parsed.callId != null ? parsed.callId : null
+								const match = callId != null
+									? toolCalls.find(t => t.callId === callId)
+									: (toolName
+										? [...toolCalls].reverse().find(t => t.name === toolName && t.status === 'running')
+										: toolCalls[toolCalls.length - 1])
 								const resultStatus = parsed.status === 'error' ? 'error' : 'success'
 								const resultText = parsed.result || parsed.output || null
 								if (match) {
@@ -258,9 +262,11 @@ export default {
 								}
 								this.streamingToolCalls = [...toolCalls]
 								// Update the right panel tool call status in real-time
-								const panelMatch = toolName
-									? [...store.recentToolCalls].find(t => t.name === toolName && t.status === 'running')
-									: null
+								const panelMatch = callId != null
+									? store.recentToolCalls.find(t => t.callId === callId)
+									: (toolName
+										? store.recentToolCalls.find(t => t.name === toolName && t.status === 'running')
+										: null)
 								if (panelMatch) {
 									panelMatch.status = resultStatus
 									panelMatch.result = resultText
