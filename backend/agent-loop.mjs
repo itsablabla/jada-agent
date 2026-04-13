@@ -28,6 +28,10 @@ export async function agentLoop({
   let messages = [...conversation];
   let round = 0;
 
+  // Track failed tool calls to prevent duplicate retries
+  // Key: "toolName:argsHash", Value: error message
+  const failedTools = new Map();
+
   while (round < MAX_TOOL_ROUNDS) {
     // Check if client disconnected before starting a new round
     if (signal?.aborted) {
@@ -149,6 +153,19 @@ export async function agentLoop({
           args = {};
         }
 
+        // Dedup check: skip if this exact tool+args already failed
+        const dedupKey = tc.name + ":" + JSON.stringify(args);
+        if (failedTools.has(dedupKey)) {
+          const prevError = failedTools.get(dedupKey);
+          onToolCall(tc.name, args);
+          onToolResult(tc.name, { content: `Skipped: already failed this session — ${prevError}`, isError: true });
+          return {
+            role: "tool",
+            tool_call_id: tc.id,
+            content: `This tool already failed with the same arguments: ${prevError}. Do not retry — use a different approach or explain the limitation to the user.`,
+          };
+        }
+
         onToolCall(tc.name, args);
 
         const result = await mcpHub.callTool(tc.name, args);
@@ -165,6 +182,11 @@ export async function agentLoop({
           } else {
             textContent = JSON.stringify(result.content);
           }
+        }
+
+        // Track failures for dedup
+        if (result.isError) {
+          failedTools.set(dedupKey, textContent.slice(0, 200));
         }
 
         onToolResult(tc.name, { content: textContent, isError: result.isError });
