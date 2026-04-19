@@ -16,6 +16,11 @@ return [
         ['name' => 'agent#getConversationToolCalls', 'url' => '/api/conversations/{id}/toolcalls', 'verb' => 'GET'],
         ['name' => 'agent#getRecentToolCalls', 'url' => '/api/toolcalls/recent', 'verb' => 'GET'],
         ['name' => 'agent#deleteConversation', 'url' => '/api/conversations/{id}', 'verb' => 'DELETE'],
+        // MCP server management
+        ['name' => 'agent#getMcpServers', 'url' => '/api/mcp', 'verb' => 'GET'],
+        ['name' => 'agent#addMcpServer', 'url' => '/api/mcp', 'verb' => 'POST'],
+        ['name' => 'agent#removeMcpServer', 'url' => '/api/mcp/{name}', 'verb' => 'DELETE'],
+
         ['name' => 'agent#getSkills', 'url' => '/api/skills', 'verb' => 'GET'],
         ['name' => 'agent#getModels', 'url' => '/api/models', 'verb' => 'GET'],
         ['name' => 'agent#getConfig', 'url' => '/api/config', 'verb' => 'GET'],

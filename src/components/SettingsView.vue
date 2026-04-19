@@ -62,13 +62,38 @@
 							<span :class="['jada-mcp-status', server.connected ? 'on' : 'off']">
 								{{ server.connected ? 'Connected' : 'Disconnected' }}
 							</span>
+							<button class="jada-mcp-remove-btn" :disabled="mcpRemoving === server.name" @click="removeMcpServer(server.name)" title="Remove">&#10005;</button>
 						</div>
 						<div v-if="!store.mcpServers.length" class="jada-mcp-empty">
-							No MCP servers connected. Configure the backend URL above.
+							No MCP servers connected. Configure the backend URL above or add one below.
 						</div>
 					</div>
+					<div v-if="mcpRemoveError" class="jada-mcp-msg err" style="margin-bottom:8px">{{ mcpRemoveError }}</div>
 					<div class="jada-mcp-total">
 						Total: {{ store.totalTools }} tools across {{ store.mcpServers.length }} servers
+					</div>
+
+					<!-- Add form -->
+					<div class="jada-mcp-add">
+						<h3>Add MCP Server</h3>
+						<div class="jada-mcp-add-row">
+							<input v-model="mcpNew.name" placeholder="Server name" />
+							<select v-model="mcpNew.type">
+								<option value="http">HTTP / SSE</option>
+								<option value="stdio">stdio</option>
+							</select>
+						</div>
+						<div class="jada-mcp-add-row">
+							<input v-if="mcpNew.type === 'http'" v-model="mcpNew.url" placeholder="https://mcp.example.com/sse" style="flex:1" />
+							<input v-else v-model="mcpNew.command" placeholder="npx -y @modelcontextprotocol/server-example" style="flex:1" />
+						</div>
+						<div class="jada-mcp-add-row">
+							<button class="jada-btn-primary" :disabled="mcpAdding" @click="addMcpServer">
+								{{ mcpAdding ? 'Adding...' : 'Add Server' }}
+							</button>
+							<span v-if="mcpAddError" class="jada-mcp-msg err">{{ mcpAddError }}</span>
+							<span v-if="mcpAddOk" class="jada-mcp-msg ok">Added!</span>
+						</div>
 					</div>
 				</div>
 
@@ -138,6 +163,13 @@ export default {
 				{ id: 'workspaces', label: 'Workspaces' },
 				{ id: 'about', label: 'About' },
 			],
+			// MCP add/remove state
+			mcpNew: { name: '', type: 'http', url: '', command: '' },
+			mcpAdding: false,
+			mcpAddError: '',
+			mcpAddOk: false,
+			mcpRemoving: null,
+			mcpRemoveError: '',
 		}
 	},
 	async mounted() {
@@ -159,6 +191,48 @@ export default {
 				this.statusOk = false
 			} finally {
 				this.saving = false
+			}
+		},
+
+		async addMcpServer() {
+			this.mcpAddError = ''
+			this.mcpAddOk = false
+			const { name, type, url, command } = this.mcpNew
+			if (!name.trim()) { this.mcpAddError = 'Name is required'; return }
+			if (type === 'http' && !url.trim()) { this.mcpAddError = 'URL is required'; return }
+			if (type === 'stdio' && !command.trim()) { this.mcpAddError = 'Command is required'; return }
+
+			this.mcpAdding = true
+			try {
+				const payload = { name: name.trim() }
+				if (type === 'http') payload.url = url.trim()
+				else payload.command = command.trim()
+
+				await api.addMcpServer(payload)
+				this.mcpAddOk = true
+				this.mcpNew = { name: '', type: 'http', url: '', command: '' }
+				// Refresh store health to pick up new server list
+				const { actions } = await import('../store.js')
+				await actions.refreshHealth()
+				setTimeout(() => { this.mcpAddOk = false }, 3000)
+			} catch (err) {
+				this.mcpAddError = err.message || 'Failed to add server'
+			} finally {
+				this.mcpAdding = false
+			}
+		},
+
+		async removeMcpServer(name) {
+			this.mcpRemoving = name
+			this.mcpRemoveError = ''
+			try {
+				await api.removeMcpServer(name)
+				const { actions } = await import('../store.js')
+				await actions.refreshHealth()
+			} catch (err) {
+				this.mcpRemoveError = err.message || 'Failed to remove server'
+			} finally {
+				this.mcpRemoving = null
 			}
 		},
 	},
@@ -369,7 +443,74 @@ export default {
 	font-weight: 600;
 }
 
-/* Workspace settings */
+.jada-mcp-remove-btn {
+	width: 26px;
+	height: 26px;
+	border-radius: 6px;
+	border: 1px solid rgba(248, 113, 113, 0.4);
+	background: transparent;
+	color: #f87171;
+	font-size: 11px;
+	cursor: pointer;
+	flex-shrink: 0;
+	transition: all 0.15s;
+}
+
+.jada-mcp-remove-btn:hover:not(:disabled) {
+	background: rgba(248, 113, 113, 0.15);
+}
+
+.jada-mcp-remove-btn:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.jada-mcp-add {
+	margin-top: 20px;
+	padding: 16px;
+	background: #1a1a24;
+	border-radius: 10px;
+}
+
+.jada-mcp-add h3 {
+	font-size: 14px;
+	font-weight: 600;
+	color: #e8e8ef;
+	margin: 0 0 12px;
+}
+
+.jada-mcp-add-row {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 8px;
+	align-items: center;
+}
+
+.jada-mcp-add-row input,
+.jada-mcp-add-row select {
+	flex: 1;
+	padding: 8px 12px;
+	border: 1px solid rgba(255,255,255,0.1);
+	border-radius: 8px;
+	background: #12121a;
+	color: #e8e8ef;
+	font-size: 13px;
+}
+
+.jada-mcp-add-row input:focus,
+.jada-mcp-add-row select:focus {
+	outline: none;
+	border-color: #e94560;
+}
+
+.jada-mcp-msg {
+	font-size: 12px;
+	font-weight: 600;
+	margin-left: 6px;
+}
+
+.jada-mcp-msg.ok { color: #4ade80; }
+.jada-mcp-msg.err { color: #f87171; }
 .jada-ws-setting-item {
 	display: flex;
 	align-items: center;

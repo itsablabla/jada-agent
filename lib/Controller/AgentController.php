@@ -237,6 +237,55 @@ class AgentController extends Controller {
 
     /**
      * @NoAdminRequired
+     *
+     * List MCP servers from the Hermes backend.
+     */
+    public function getMcpServers(): JSONResponse {
+        return new JSONResponse($this->openClaw->get('/api/v1/mcp', $this->getUserHeaders()));
+    }
+
+    /**
+     * @NoAdminRequired
+     *
+     * Add a new MCP server to the Hermes backend.
+     */
+    public function addMcpServer(): JSONResponse {
+        $name    = trim((string) $this->request->getParam('name', ''));
+        $url     = trim((string) $this->request->getParam('url', ''));
+        $command = $this->request->getParam('command', null);
+        if ($command !== null) {
+            $command = trim((string) $command);
+        }
+        $args    = $this->request->getParam('args', []);
+
+        if ($name === '') {
+            return new JSONResponse(['error' => 'name is required'], 400);
+        }
+        if ($url === '' && ($command === null || $command === '')) {
+            return new JSONResponse(['error' => 'url or command is required'], 400);
+        }
+
+        $payload = array_filter([
+            'name'    => $name,
+            'url'     => $url ?: null,
+            'command' => $command,
+            'args'    => $args ?: null,
+        ], fn($v) => $v !== null);
+
+        return new JSONResponse($this->openClaw->post('/api/v1/mcp', $payload, $this->getUserHeaders()));
+    }
+
+    /**
+     * @NoAdminRequired
+     *
+     * Remove an MCP server from the Hermes backend by name.
+     */
+    public function removeMcpServer(string $name): JSONResponse {
+        return new JSONResponse($this->openClaw->delete('/api/v1/mcp/' . rawurlencode($name), $this->getUserHeaders()));
+    }
+
+    /**
+     * @NoAdminRequired
      */
     public function getSkills(): JSONResponse {
         return new JSONResponse($this->openClaw->get('/api/v1/skills', $this->getUserHeaders()));

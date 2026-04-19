@@ -112,6 +112,21 @@ export default {
 		return res.data
 	},
 
+	async getMcpServers() {
+		const res = await axios.get(`${baseUrl}/api/mcp`)
+		return res.data
+	},
+
+	async addMcpServer(server) {
+		const res = await axios.post(`${baseUrl}/api/mcp`, server)
+		return res.data
+	},
+
+	async removeMcpServer(name) {
+		const res = await axios.delete(`${baseUrl}/api/mcp/${encodeURIComponent(name)}`)
+		return res.data
+	},
+
 	async getSkills() {
 		const res = await axios.get(`${baseUrl}/api/skills`)
 		return res.data
