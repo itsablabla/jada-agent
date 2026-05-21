@@ -7,6 +7,8 @@ document.addEventListener('DOMContentLoaded', () => {
 	const msgEl = document.getElementById('openclaw-settings-msg')
 	const urlInput = document.getElementById('openclaw-url')
 	const tokenInput = document.getElementById('openclaw-token')
+	const serviceEmailInput = document.getElementById('librechat-service-email')
+	const servicePasswordInput = document.getElementById('librechat-service-password')
 
 	if (!saveBtn) return
 
@@ -27,6 +29,8 @@ document.addEventListener('DOMContentLoaded', () => {
 					body: JSON.stringify({
 						openclaw_url: urlInput.value.trim(),
 						openclaw_token: tokenInput.value.trim(),
+						librechat_service_email: serviceEmailInput.value.trim(),
+						librechat_service_password: servicePasswordInput.value.trim(),
 					}),
 				},
 			)
