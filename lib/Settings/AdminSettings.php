@@ -17,7 +17,7 @@ class AdminSettings implements ISettings {
 
     public function getForm(): TemplateResponse {
         $params = [
-            'openclaw_url' => $this->config->getAppValue('jadaagent', 'openclaw_url', 'http://localhost:18789'),
+            'openclaw_url' => $this->config->getAppValue('jadaagent', 'openclaw_url', 'http://LibreChat:3080'),
             'openclaw_token' => $this->config->getAppValue('jadaagent', 'openclaw_token', '') ? '••••••••' : '',
         ];
         return new TemplateResponse('jadaagent', 'admin', $params);

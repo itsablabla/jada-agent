@@ -4,14 +4,14 @@ script('jadaagent', 'jadaagent-admin');
 ?>
 <div id="jada-agent-admin">
     <div class="section">
-        <h2><?php p($l->t('Jada Agent — OpenClaw Settings')); ?></h2>
-        <p class="settings-hint"><?php p($l->t('Configure the connection to your OpenClaw instance.')); ?></p>
+        <h2><?php p($l->t('Jada Agent — LibreChat Settings')); ?></h2>
+        <p class="settings-hint"><?php p($l->t('Configure the connection to your LibreChat backend.')); ?></p>
         
         <div class="jada-settings-form">
             <label for="openclaw-url"><?php p($l->t('OpenClaw URL')); ?></label>
             <input type="text" id="openclaw-url" 
                    value="<?php p($_['openclaw_url']); ?>" 
-                   placeholder="http://localhost:18789" />
+                   placeholder="http://LibreChat:3080" />
             
             <label for="openclaw-token"><?php p($l->t('API Token')); ?></label>
             <input type="password" id="openclaw-token" 
