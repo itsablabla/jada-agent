@@ -4,92 +4,94 @@ Guide for E2E testing the Jada AI native Nextcloud app on the live deployment.
 
 ## Devin Secrets Needed
 
-- `NEXTCLOUD_APP_PASSWORD` — Nextcloud admin app password for API auth
-- SSH key file at `~/attachments/.../id_rsa` — provided per-session by user for server access to 83.228.213.100
+- SSH key at `~/.ssh/nc_rsa` — for `ubuntu@83.228.213.100` access
+- No Nextcloud app password needed if testing via browser (admin is already logged in)
 
 ## Infrastructure
 
 | Component | Location | Notes |
 |-----------|----------|-------|
-| Nextcloud UI | https://next.garzaos.online/apps/jadaagent/ | Admin login: admin / `${NEXTCLOUD_APP_PASSWORD}` |
-| Local Hermes backend | 83.228.213.100 container `hermes-backend` port 3200 | The Nextcloud app connects via `http://172.18.0.1:3200` |
-| External Hermes API | https://jada-api.garzaos.online | On 187.77.25.131 — may have STALE config; the Nextcloud app uses the LOCAL backend |
-| Telegram bot | Container `jada-telegram-bot` on 83.228.213.100 | Token changes frequently — check with user |
-| Conversations on disk | `/data/conversations.json` inside `hermes-backend` container | File-based persistence with 2s debounce |
+| Nextcloud UI | https://next.garzaos.online/apps/jadaagent/ | Admin login: "Jaden" (admin user) |
+| Local Hermes backend | 83.228.213.100 container `hermes-agent` port 3200 | Nextcloud connects via `http://172.18.0.1:3200` |
+| Hermes config | `/opt/hermes-agent/config.yaml` on host | MCP servers, model, providers |
+| Hermes env | `/opt/hermes-agent/.env` on host | API keys (GOOGLE_API_KEY, OPENROUTER_API_KEY) |
+| Conversations | localStorage in browser (`jada_conv_*` keys) | Client-side persistence |
 
 ## Key API Endpoints
 
-### Via Nextcloud proxy (requires Nextcloud auth)
+### Via Nextcloud proxy (requires Nextcloud auth or browser session)
 ```bash
-# List conversations (requires OCS header to bypass CSRF)
+# Health check (returns model_name, tool_count, server info)
+curl -s -u "admin:${NEXTCLOUD_APP_PASSWORD}" -H "OCS-APIRequest: true" \
+  "https://next.garzaos.online/apps/jadaagent/api/health"
+
+# List conversations
 curl -s -u "admin:${NEXTCLOUD_APP_PASSWORD}" -H "OCS-APIRequest: true" \
   "https://next.garzaos.online/apps/jadaagent/api/conversations"
-
-# Send a chat message
-curl -s -u "admin:${NEXTCLOUD_APP_PASSWORD}" -H "OCS-APIRequest: true" \
-  -X POST -H "Content-Type: application/json" \
-  -d '{"message": "List my files"}' \
-  "https://next.garzaos.online/apps/jadaagent/api/chat"
 ```
 
-### Via Hermes directly (Bearer token auth)
+### Via Hermes directly (Bearer token auth, from the server)
 ```bash
-curl -s -H "Authorization: Bearer jada-chat-2026" \
-  "https://jada-api.garzaos.online/health"
-# Returns: {status, mcpServers: {name: {status, tools}}, tools: N, conversations: N}
+# Health check
+ssh -i ~/.ssh/nc_rsa ubuntu@83.228.213.100 'curl -s http://localhost:3200/health'
+
+# Chat completion (OpenAI-compatible)
+ssh -i ~/.ssh/nc_rsa ubuntu@83.228.213.100 'curl -s -X POST http://localhost:3200/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer jada-chat-2026" \
+  -H "X-Nextcloud-User: admin" \
+  -d "{\"model\":\"gemini-2.5-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":true}"'
 ```
 
 ## Testing Checklist
 
-### 1. MCP Config Verification
+### 1. Health Display Verification
 - Navigate to https://next.garzaos.online/apps/jadaagent/
-- Check status bar (bottom-left) for correct server count and tool count
-- Check right panel "MCP Servers" section for correct server names and tool counts
-- The greeting should show the correct tool count
+- Check ALL 6 locations show consistent data:
+  1. Greeting: "N tools across M servers"
+  2. Footer: "Model Name · N tools · Workspace: Name"
+  3. Sidebar status: "M servers · N tools"
+  4. Right panel MCP Servers tab: Server names + counts
+  5. Right panel Context tab: "Total Tools: N"
+  6. Settings > MCP Servers: "Total: N tools across M servers"
+- Current expected values: Gemini 2.5 Flash / 118 tools / 1 server (Nextcloud)
 
 ### 2. Conversation Continuity
 - Click "+ New Chat"
 - Send a message that triggers a tool call (e.g., "List my Nextcloud files")
 - Wait for response — should show tool call and formatted result
-- Navigate away (click Files or another Nextcloud app)
-- Navigate back to Jada Agent
-- Wait ~5 seconds for conversations to load in sidebar
+- Reload page (F5)
 - Click the conversation in sidebar — messages should reload
 - Send a follow-up referencing the first message
 - **Pass**: Agent retains context and references previous data
 - **Fail**: Agent says "I don't have context" or creates a new conversation
 
-### 3. Disk Verification (Double-Prefix Bug)
+### 3. Performance Verification
 ```bash
-# Check for double-prefix conversation IDs
-curl -s -u "admin:${NEXTCLOUD_APP_PASSWORD}" -H "OCS-APIRequest: true" \
-  "https://next.garzaos.online/apps/jadaagent/api/conversations" | \
-  python3 -c "
-import json, sys
-data = json.loads(sys.stdin.read())
-ids = [c['id'] for c in data]
-double = [i for i in ids if i.count('admin:') > 1]
-print(f'Double-prefix: {len(double)} {\"NONE\" if not double else double}')
-"
+# Measure TTFB directly against Hermes
+ssh -i ~/.ssh/nc_rsa ubuntu@83.228.213.100 'curl -s -o /dev/null -w "TTFB: %{time_starttransfer}s\nTotal: %{time_total}s\n" -X POST http://localhost:3200/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer jada-chat-2026" -H "X-Nextcloud-User: admin" -d "{\"model\":\"gemini-2.5-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":true}"'
 ```
-- New conversations should have format `admin:conv-{timestamp}` (single prefix)
-- Legacy conversations with `admin:admin:conv-...` are pre-fix artifacts
+- Expected: Total < 4s cold, < 2s cached
+- Old baseline (Qwen 3.5 Plus + 303 tools): 5.95s+
 
 ### 4. Tool Call Display
 - After sending a message that triggers a tool call
-- Right panel "Recent Tool Calls" should show the tool name with a checkmark
-- The chat area should show inline tool call visualization
+- Right panel "Recent Tool Calls" should show the tool name with ✅
+- The chat area should show formatted markdown (no raw JSON)
+- Failed tools show ❌ in the right panel
 
 ## Common Pitfalls
 
-1. **SSH access to 83.228.213.100** — Only accepts SSH key auth (no password). The key is provided per-session as an attachment. Run `chmod 600` on it before use. The key may stop working mid-session.
+1. **SSH access to 83.228.213.100** — Use `ssh -i ~/.ssh/nc_rsa ubuntu@83.228.213.100`. Key-based auth only.
 
-2. **Brief "Hello, User" / "0 servers" flash on page load** — When navigating to the app, the UI briefly shows defaults before the health check completes (~3-5 seconds). This is a known minor UX issue, not a functional bug.
+2. **Brief "Hello, User" / "0 tools" flash on page load** — The UI briefly shows defaults before the health check completes (~1-3 seconds). This is a known minor UX issue.
 
-3. **External vs Local Hermes** — The Nextcloud app uses the LOCAL Hermes on 83.228.213.100, NOT the external one at jada-api.garzaos.online. The external API may have stale/different config.
+3. **Stale JS cache** — If the UI shows old values after a code deploy, the version in `appinfo/info.xml` needs bumping and `php occ upgrade` needs to run inside the Nextcloud container.
 
-4. **CSRF on Nextcloud API calls** — Always include `-H "OCS-APIRequest: true"` header when calling Nextcloud proxy endpoints via curl, or you'll get "CSRF check failed".
+4. **CSRF on Nextcloud API calls** — Always include `-H "OCS-APIRequest: true"` header when calling Nextcloud proxy endpoints via curl.
 
-5. **Telegram bot token changes** — The bot token gets revoked/regenerated periodically. Always verify with the user if you see 401 errors from the Telegram bot container.
+5. **docker cp /dev/stdin creates symlinks** — NEVER use `docker cp /dev/stdin`. Always scp to host /tmp first, then docker cp from /tmp.
 
-6. **Deploying code changes** — Use `docker cp` to copy files into containers, then `docker restart` the container. For PHP changes, copy to `/var/www/html/custom_apps/jadaagent/` inside the Nextcloud container. For backend changes, copy to `/app/` inside `hermes-backend` container.
+6. **Composio and Proton-Unified are disabled** — These MCP servers are disabled in config.yaml for performance (eliminated 185 unused tool schemas from every prompt). They can be re-enabled in `/opt/hermes-agent/config.yaml` when those upstream services are operational.
+
+7. **Prompt caching** — Gemini 2.5 Flash has automatic prompt caching. First request after restart is slower (~3.8s), subsequent requests use cache (~1.35s). This is expected behavior, not a bug.
